@@ -110,6 +110,7 @@ class MaverickBackend(CorefBackend):
         try:
             self.model = (Maverick(hf_name_or_path=model, device=device) if model
                           else Maverick(device=device))
+            self.model.model = self.model.model.float()
         finally:
             torch.load = _orig_load
         # Singleton-capable checkpoints (litbank, preco) only EMIT singletons when
