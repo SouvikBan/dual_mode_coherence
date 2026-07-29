@@ -9,9 +9,11 @@ csv_header = ["story_id", "sent_id", "token_id", "deprel", "form", "GRP", "etype
 if not Path("to_annotate").exists():
     Path("to_annotate").mkdir()
 
-current_story_id = "0"
 sent_id_decr = 0
-csvwriter = None
+current_story_id = "1"
+
+f_story = open(f"to_annotate/story_{current_story_id}_coref.csv", "w")
+csvwriter = csv.writer(f_story, delimiter=";", quoting=csv.QUOTE_MINIMAL)
 
 with open("naturalstories/parses/ud/stories-aligned.conllx", "r") as f:
     for sent_id, sentence in enumerate(parse_incr(f)):
@@ -20,7 +22,7 @@ with open("naturalstories/parses/ud/stories-aligned.conllx", "r") as f:
             story_id, token_id = token["misc"]["TokenId"].split(".", 1)
             # save to file if end of story encountered
             if story_id != current_story_id:
-                f_story = open(f"to_annotate/story_{current_story_id}_coref.csv", "w")
+                f_story = open(f"to_annotate/story_{story_id}_coref.csv", "w")
                 csvwriter = csv.writer(f_story, delimiter=";", quoting=csv.QUOTE_MINIMAL)
                 csvwriter.writerow(csv_header)
 
@@ -28,3 +30,4 @@ with open("naturalstories/parses/ud/stories-aligned.conllx", "r") as f:
                 current_story_id = story_id
 
             csvwriter.writerow([story_id, sent_id-sent_id_decr, token_id, token["deprel"], token["form"]])
+    
