@@ -79,7 +79,7 @@ def main():
 	ilm_scorer = scorer.IncrementalLMScorer(model=args.model_name_or_path, device=device)
 	tokenizer = ilm_scorer.tokenizer
 
-	csv_header = ["word", "story_id", "story_position", "sentence_id", "sentence_position", "surprisal"]
+	csv_header = ["word", "item", "zone", "sentence_id", "sentence_position", "surprisal"]
 	f_out = open(args.out_file, "w")
 	csvwriter = csv.writer(f_out, delimiter="\t", quoting=csv.QUOTE_MINIMAL)
 	csvwriter.writerow(csv_header)

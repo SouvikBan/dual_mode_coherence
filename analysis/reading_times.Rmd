@@ -1,0 +1,38 @@
+```{r}
+library(lme4)
+library(dplyr)
+library(tidyverse)
+```
+
+```{r}
+df_rts <- read.table("../naturalstories/naturalstories_RTS/processed_RTs.tsv", sep="\t", header = TRUE)
+df_surp <- subset(read.table("../naturalstories/naturalstories_RTS/stories_surprisal.tsv", sep="\t", header = TRUE), select = -c(word))
+```
+
+```{r}
+files <- list.files("../iv_ns/", pattern = ".csv", full.names = TRUE)
+df_iv <- files %>%
+  map_df(~read_csv(., show_col_types = FALSE), .id = "item")
+df_iv <- subset(df_iv, select = -c(dataset, annotation_condition, group_id, numeric_group_id, context_id, story_id, target_id, target_variant, target_text, mean_acceptability, median_acceptability, n_alternatives, source_schema_version, metric_version, table_schema_version))
+df_iv <- df_iv %>% rename(sentence_id = sentence_index)
+```
+
+
+```{r}
+df_all <- merge(x=df_rts, y=df_surp, by = c("item", "zone"), all.x = TRUE)
+df_all <- merge(x=df_all, y=df_iv, by = c("item", "sentence_id"), all.x = TRUE)
+story_ids <- unique(df_all$item)
+```
+
+```{r}
+set.seed(42)
+shuffled_ids = sample(story_ids)
+test_folds <- split(shuffled_ids, rep(1:5, each=2))
+
+for (i in 1:5) {
+  test_ids <- test_folds[[i]]
+  train_ids <- setdiff(shuffled_ids, test_ids)
+  df_test <- df_all %>% filter(item %in% test_ids)
+  df_train <- df_all %>% filter(item %in% train_ids)
+}
+```
