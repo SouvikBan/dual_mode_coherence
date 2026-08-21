@@ -1,38 +1,181 @@
 ```{r}
-library(lme4)
+library(brms)
 library(dplyr)
 library(tidyverse)
+library(performance)
+library(lme4)
+library(fitdistrplus)
 ```
 
 ```{r}
-df_rts <- read.table("../naturalstories/naturalstories_RTS/processed_RTs.tsv", sep="\t", header = TRUE)
-df_surp <- subset(read.table("../naturalstories/naturalstories_RTS/stories_surprisal.tsv", sep="\t", header = TRUE), select = -c(word))
+df_freqs <- read.csv("../naturalstories/freqs/freqs-1.tsv", sep = "\t", header = FALSE, 
+                     col.names = c("index", "order", "word", "freq", "empty")) %>% 
+  separate_wider_delim(index, delim = ".", names = c("item", "zone", "region")) %>%
+  filter(, region == "word") %>%
+  subset(, select = -c(order, empty, region, word))
+```
+
+```{r}
+df_rts <- read.csv("../naturalstories/naturalstories_RTS/processed_RTs.tsv", sep = "\t", header = TRUE) %>%
+  mutate(word_length = nchar(word))
+df_surp <- subset(read.csv("../naturalstories/naturalstories_RTS/stories_surprisal.tsv", sep = "\t", header = TRUE), select = -c(word))
 ```
 
 ```{r}
 files <- list.files("../iv_ns/", pattern = ".csv", full.names = TRUE)
 df_iv <- files %>%
   map_df(~read_csv(., show_col_types = FALSE), .id = "item")
-df_iv <- subset(df_iv, select = -c(dataset, annotation_condition, group_id, numeric_group_id, context_id, story_id, target_id, target_variant, target_text, mean_acceptability, median_acceptability, n_alternatives, source_schema_version, metric_version, table_schema_version))
-df_iv <- df_iv %>% rename(sentence_id = sentence_index)
+df_iv <- df_iv %>%
+  subset(, select = -c(dataset, annotation_condition, group_id, 
+                                   numeric_group_id, context_id, story_id, 
+                                   target_id, target_variant, target_text, 
+                                   mean_acceptability, median_acceptability, 
+                                   n_alternatives, source_schema_version, 
+                                   metric_version, table_schema_version)) %>% 
+  rename(, sentence_id = sentence_index)
 ```
-
 
 ```{r}
 df_all <- merge(x=df_rts, y=df_surp, by = c("item", "zone"), all.x = TRUE)
+df_all <- merge(x=df_all, y=df_freqs, by = c("item", "zone"), all.x = TRUE)
+#df_all %>% filter(if_any(freq, is.na)) # Mr. Sticky
+# add 1 to absolute frequency of oov items
+# (will result in 0 frequency after log transformation)
+df_all$freq <- df_all$freq + 1
 df_all <- merge(x=df_all, y=df_iv, by = c("item", "sentence_id"), all.x = TRUE)
-story_ids <- unique(df_all$item)
+df_all <- df_all %>% drop_na(freq)
+df_all <- df_all %>%
+  mutate(
+    surprisal.x = as.vector(scale(surprisal)),
+    word_length.x = as.vector(scale(word_length)),
+    sentence_position.x = as.vector(scale(sentence_position)),
+    zone.x = as.vector(scale(zone)),
+    log_freq.x = as.vector(scale(log(freq))),
+    iv_recurrence_mean.x = as.vector(scale(iv_recurrence_mean)),
+    iv_feature_role_form_mean.x = as.vector(scale(iv_recurrence_mean)),
+    iv_feature_role_no_other_mean.x = as.vector(scale(iv_feature_role_form_no_other_mean)),
+    iv_feature_role_only_mean.x = as.vector(scale(iv_feature_role_only_mean)),
+    iv_new_entity_mean.x = as.vector(scale(iv_new_entity_mean)),
+  ) %>%
+  mutate_if(is.numeric, ~replace_na(., 0.))
 ```
 
 ```{r}
-set.seed(42)
-shuffled_ids = sample(story_ids)
-test_folds <- split(shuffled_ids, rep(1:5, each=2))
+min(log(df_all$freq))
+max(log(df_all$freq))
+mean(df_all$log_freq.x)
+```
 
-for (i in 1:5) {
-  test_ids <- test_folds[[i]]
-  train_ids <- setdiff(shuffled_ids, test_ids)
-  df_test <- df_all %>% filter(item %in% test_ids)
-  df_train <- df_all %>% filter(item %in% train_ids)
+
+
+```{r}
+ggplot(df_all, aes(x=log(RT))) +
+  geom_histogram() #+
+  #scale_x_continuous(limits = c(100, 2000), breaks = seq(0, 2000, 50)) 
+```
+```{r}
+df_1 = filter(df_all, item == 1)
+shapiro.test(df_1$RT[0:5000])
+```
+
+
+```{r}
+descdist(log(df_all$RT), discrete=FALSE, boot=500)
+descdist(df_all$RT, discrete=FALSE, boot=500)
+```
+```{r}
+df_fit <- df_all %>%
+    filter(item %in% c(1,3,5,7,9))
+```
+
+```{r}
+b0 <- lmer(log(RT) ~ surprisal.x + (1|WorkerId),
+           data = df_fit)
+b1 <- lmer(log(RT) ~ surprisal.x + log_freq.x + (1|WorkerId),
+            data = df_fit)
+b2 <- lmer(log(RT) ~ surprisal.x + zone.x + (1|WorkerId),
+            data = df_fit)
+b3 <- lmer(log(RT) ~ surprisal.x + sentence_position.x + (1|WorkerId),
+            data = df_fit)
+b4 <- lmer(log(RT) ~ surprisal.x + sentence_position.x + zone.x + (1|WorkerId),
+            data = df_fit)
+anova(b0,b1)
+anova(b0,b2)
+anova(b0,b3)
+anova(b2,b4)
+```
+
+```{r}
+df_fit0 <- df_fit %>%
+  group_by(item, zone, sentence_id, sentence_position, word) %>%
+  summarise(
+    across(
+      RT:log_freq.x, ~ mean(.x, na.rm = TRUE)
+    )
+  )
+head(df_fit0)
+```
+
+```{r}
+b0 <- lm(log(RT) ~ zone.x + log_freq.x,
+            data = df_fit0)
+b1 <- lm(log(RT) ~ surprisal.x + zone.x + log_freq.x,
+            data = df_fit0)
+logLik(b0)
+logLik(b1)
+anova(b0,b1)
+```
+
+```{r}
+b0 <- glmer(RT ~ word_length.x + sentence_position.x + log_freq.x + (1|item),
+            data = df_fit0, Gamma(link = "log"))
+b1 <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x + (1|item),
+            data = df_fit0, Gamma(link = "log"))
+anova(b0,b1)
+```
+```{r}
+c0 <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x 
+           + iv_feature_role_form_p80 + (1|item),
+           data = df_fit0, Gamma(link = "log"))
+c1 <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x
+          + iv_recurrence_p80 + (1|item),
+          data = df_fit0, Gamma(link = "log"))
+c2 <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x
+          + iv_new_entity_p80 + (1|item),
+          data = df_fit0, Gamma(link = "log"))
+anova(b1,c0, test = "Chisq")
+anova(b1,c1, test = "Chisq")
+anova(b1,c2, test = "Chisq")
+```
+
+```{r}
+fixef(c0)
+```
+
+
+```{r}
+#set.seed(42)
+#shuffled_ids = sample(story_ids)
+#test_folds <- split(shuffled_ids, rep(1:10, each=1))
+
+cross_validate <- function(df) {
+  for (test_id in 1:10) {
+    train_ids <- setdiff(story_ids, c(test_id))
+    df_test <- df %>% filter(item == test_id)
+    df_train <- df %>% filter(item %in% train_ids)
+    b_i <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x 
+                 + (1|item) + (1|WorkerId),
+                 data = df_train, Gamma(link = "log"))
+    c_i <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x 
+                 + iv_new_entity_p80
+                 + (1|item) + (1|WorkerId),
+                 data = df_train, Gamma(link = "log"))
+    anova(b_i, c_i, test = "Chisq")
+  }
 }
 ```
+
+```{r}
+cross_validate(df_all)
+```
+
