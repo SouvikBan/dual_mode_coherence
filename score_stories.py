@@ -18,7 +18,6 @@ NATURAL_STORIES_TOK_FILE = "naturalstories/naturalstories_RTS/all_stories.tok"
 
 def parse_args():
 	parser = ArgumentParser()
-	parser.add_argument("--model-name-or-path", type=str, default="openai-community/gpt2")
 	parser.add_argument("--window-size", type=int, default=128)
 	parser.add_argument("--stride", type=int, default=1)
 	parser.add_argument("--batch-size", type=int, default=16)
@@ -39,6 +38,7 @@ def _compile_stimuli(story_words: List[str], window_size: int, stride: int, toke
 			word_tokens = tokenizer.encode(f" {story_words[context_idx]}")
 			stimulus.insert(0, word_tokens)
 			num_context_tokens += len(word_tokens)
+			# stop sampling once window size is exceeded
 			if num_context_tokens >= window_size:
 				break
 		stimulus.insert(0, [tokenizer.bos_token_id])
@@ -75,8 +75,10 @@ def _get_word_score(token_scores: List[Tuple[str, float]]) -> float:
 def main():
 
 	args = parse_args()
-
-	ilm_scorer = scorer.IncrementalLMScorer(model=args.model_name_or_path, device=device)
+	from transformers import AutoTokenizer
+	tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m-deduped")
+	ilm_scorer = scorer.IncrementalLMScorer(
+		model="EleutherAI/pythia-70m-deduped", tokenizer=tokenizer, device=device, revision="step1000")
 	tokenizer = ilm_scorer.tokenizer
 
 	csv_header = ["word", "item", "zone", "sentence_id", "sentence_position", "surprisal"]
@@ -108,7 +110,7 @@ def main():
 		for story_position, (word, score) in enumerate(zip(story_words, word_scores), start=1):
 			csvwriter.writerow([word, story_id, story_position, sentence_id, sentence_position, score])
 			sentence_position += 1
-			if word.endswith("."):
+			if (word.endswith(".") or word.endswith(".'")) and not word in ["Mr.", "Dr."]:
 				sentence_id += 1
 				sentence_position = 1
 
