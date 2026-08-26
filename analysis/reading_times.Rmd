@@ -1,71 +1,195 @@
 ```{r}
-library(brms)
 library(dplyr)
 library(tidyverse)
 library(performance)
 library(lme4)
-library(fitdistrplus)
-```
-
-```{r}
-df_freqs <- read.csv("../naturalstories/freqs/freqs-1.tsv", sep = "\t", header = FALSE, 
-                     col.names = c("index", "order", "word", "freq", "empty")) %>% 
-  separate_wider_delim(index, delim = ".", names = c("item", "zone", "region")) %>%
-  filter(, region == "word") %>%
-  subset(, select = -c(order, empty, region, word))
+#library(partR2)
+#library(fitdistrplus)
+library(glmmTMB)
+library(glmm.hp)
+library(r2glmm)
+library(DHARMa)
 ```
 
 ```{r}
 df_rts <- read.csv("../naturalstories/naturalstories_RTS/processed_RTs.tsv", sep = "\t", header = TRUE) %>%
+  distinct() %>%
   mutate(word_length = nchar(word))
-df_surp <- subset(read.csv("../naturalstories/naturalstories_RTS/stories_surprisal.tsv", sep = "\t", header = TRUE), select = -c(word))
 ```
+
+```{r}
+df_rts_by_zone <- df_rts %>%
+  summarise(
+    RT_mean = mean(RT),
+    RT_sd = sd(RT),
+    lower = RT_mean - RT_sd,
+    upper = RT_mean + RT_sd,
+    .by = c(item, zone)
+  ) %>%
+  mutate(zone_s = scale(zone))
+```
+
+```{r}
+ggplot(df_rts_by_zone, aes(y = RT_mean, x = zone)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), fill = "grey", alpha = 0.4) +
+  geom_line(aes(y = RT_mean), color = "grey", size = .5) +
+  facet_wrap(~item, scales = "free_x", ncol = 5) +
+  coord_cartesian(ylim = c(100, 900)) +
+  labs(
+    title = "RTs by position in story",
+    x = "Word Position",
+    y = "Reading Time"
+  ) + 
+  theme_bw()
+```
+Remove outliers as in Oh and Schuler (2023)
+
+```{r}
+df_rts_clean <- df_rts %>%
+  filter(RT > 200 & RT < 3000) %>%
+  filter(correct >= 4)
+```
+
+Fit regression model on zone only
+
+```{r}
+df_rts_by_zone_clean <- df_rts_clean %>%
+  summarise(
+    RT_mean = mean(RT),
+    RT_sd = sd(RT),
+    lower = RT_mean - RT_sd,
+    upper = RT_mean + RT_sd,
+    .by = c(item, zone)
+  ) %>%
+  mutate(zone_s = scale(zone))
+zone_model = lmer(RT_mean ~ zone + (1 + zone |item), data = df_rts_by_zone_clean)
+```
+
+Predict reading times from regression model
+
+```{r}
+grid_data <- df_rts_by_zone_clean %>% dplyr::select(item, zone)
+RTs_pred = predict(zone_model, newdata = grid_data)
+```
+
+Calculate effective slopes (estimate of zone plus random slope per item)
+
+```{r}
+slope_zone <- fixef(zone_model)["zone"]
+slopes_by_item <- ranef(zone_model)$item["zone"] + slope_zone
+label_data = data.frame(
+  item = seq(1,10),
+  slope = round(slopes_by_item$zone,3)
+) %>%
+  mutate(
+    label = str_glue("β = {slope}")
+  )
+```
+
+```{r}
+ggplot(df_rts_by_zone_clean, aes(y = RT_mean, x = zone)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), fill = "grey", alpha = 0.4) +
+  geom_line(aes(y = RT_mean), color = "grey", size = .5) +
+  geom_line(aes(x = zone, y = RTs_pred), color = "blue", size = 0.5) +
+  geom_text(data = label_data, aes(x = 500, y = 800, label = label),
+            color = "grey50", fontface = "bold", size = 2.5) +
+  facet_wrap(~item, scales = "free_x", ncol = 5) +
+  coord_cartesian(ylim = c(100, 1000)) +
+  labs(
+    title = "RTs by position in story",
+    x = "Word Position",
+    y = "Reading Time"
+  ) + 
+  theme_bw()
+```
+
+```{r}
+df_surp <- read.csv("../naturalstories/naturalstories_RTS/stories_surprisa_pythia_70m_step1000.tsv", sep = "\t", header = TRUE) %>%
+  subset(select = -c(word, sentence_position))
+  
+# df_rts0 <- df_rts_clean %>%
+#   group_by(item, zone) %>%
+#   subset(select = -c(WorkerId, WorkTimeInSeconds)) %>%
+#   summarise(
+#     across(where(is.numeric), mean, rm.na = TRUE),
+#     .groups  = "drop_last"
+#   )
+
+df_all <- merge(x=df_rts, y=df_surp, by = c("item", "zone"), all.x = TRUE)
+sum(is.na(df_all$surprisal))
+```
+
+```{r}
+df_sent_lengths <- df_surp %>%
+  subset(select = c(item, sentence_id, zone)) %>%
+  group_by(item, sentence_id) %>%
+  mutate(
+    sentence_length = length(zone)
+  )
+df_all <- merge(x=df_all, y=df_sent_lengths, by = c("item", "sentence_id", "zone"), all.x = TRUE)
+```
+
+
+```{r}
+df_all0 <- df_all %>%
+  subset(select = -c(zone, RT, correct, nItem, sdItemRT, gmeanItemRT, gsdItemRT, word_length)) %>%
+  distinct() %>%
+  group_by(item, sentence_id, WorkerId) %>%
+  summarise(
+    # across(where(is.numeric), sum, na.rm = TRUE),
+    sum_RT = sum(meanItemRT),
+    sentence_length = mean(sentence_length),
+    max_surprisal = max(surprisal),
+    mean_surprisal = mean(surprisal),
+    sum_surprisal = sum(surprisal),
+    .groups = "drop_last"
+  )
+```
+
+
 
 ```{r}
 files <- list.files("../iv_ns/", pattern = ".csv", full.names = TRUE)
 df_iv <- files %>%
   map_df(~read_csv(., show_col_types = FALSE), .id = "item")
 df_iv <- df_iv %>%
-  subset(, select = -c(dataset, annotation_condition, group_id, 
-                                   numeric_group_id, context_id, story_id, 
-                                   target_id, target_variant, target_text, 
-                                   mean_acceptability, median_acceptability, 
-                                   n_alternatives, source_schema_version, 
-                                   metric_version, table_schema_version)) %>% 
-  rename(, sentence_id = sentence_index)
+  subset(, select = -c(dataset, annotation_condition, group_id,
+                                   numeric_group_id, context_id, story_id,
+                                   target_id, target_variant, target_text,
+                                   mean_acceptability, median_acceptability,
+                                   n_alternatives, source_schema_version,
+                                   metric_version, table_schema_version)) %>%
+  rename(., sentence_id = sentence_index)
+df_all0 <- merge(x=df_all0, y=df_iv, by = c("item", "sentence_id"), all.x = TRUE)
 ```
 
 ```{r}
-df_all <- merge(x=df_rts, y=df_surp, by = c("item", "zone"), all.x = TRUE)
-df_all <- merge(x=df_all, y=df_freqs, by = c("item", "zone"), all.x = TRUE)
-#df_all %>% filter(if_any(freq, is.na)) # Mr. Sticky
-# add 1 to absolute frequency of oov items
-# (will result in 0 frequency after log transformation)
-df_all$freq <- df_all$freq + 1
-df_all <- merge(x=df_all, y=df_iv, by = c("item", "sentence_id"), all.x = TRUE)
-df_all <- df_all %>% drop_na(freq)
-df_all <- df_all %>%
+# log-transform unigram frequency
+df_all0 <- df_all0 %>%
   mutate(
-    surprisal.x = as.vector(scale(surprisal)),
-    word_length.x = as.vector(scale(word_length)),
-    sentence_position.x = as.vector(scale(sentence_position)),
-    zone.x = as.vector(scale(zone)),
-    log_freq.x = as.vector(scale(log(freq))),
-    iv_recurrence_mean.x = as.vector(scale(iv_recurrence_mean)),
-    iv_feature_role_form_mean.x = as.vector(scale(iv_recurrence_mean)),
-    iv_feature_role_no_other_mean.x = as.vector(scale(iv_feature_role_form_no_other_mean)),
-    iv_feature_role_only_mean.x = as.vector(scale(iv_feature_role_only_mean)),
-    iv_new_entity_mean.x = as.vector(scale(iv_new_entity_mean)),
+    sentence_length_s = as.vector(scale(sentence_length)),
+    sentence_id_s = as.vector(scale(sentence_id)),
+    sum_surprisal_s = as.vector(scale(sum_surprisal)),
+    mean_surprisal_s = as.vector(scale(mean_surprisal)),
+    max_surprisal_s = as.vector(scale(max_surprisal)),
+    # surprisal_s = as.vector(scale(surprisal)),
+    # word_length_s = as.vector(scale(word_length)),
+    # sentence_position_s = as.vector(scale(sentence_position)),
+    # zone_s= as.vector(scale(zone)),
+    # log_freq_s = as.vector(scale(log_freq)),
+    iv_recurrence_mean_s = as.vector(scale(iv_recurrence_mean)),
+    iv_feature_role_form_mean_s = as.vector(scale(iv_recurrence_mean)),
+    iv_feature_role_no_other_mean_s = as.vector(scale(iv_feature_role_form_no_other_mean)),
+    iv_feature_role_only_mean_s = as.vector(scale(iv_feature_role_only_mean)),
+    iv_new_entity_mean_s = as.vector(scale(iv_new_entity_mean)),
+    iv_recurrence_p80_s = as.vector(scale(iv_recurrence_p80)),
+    iv_feature_role_form_p80_s = as.vector(scale(iv_recurrence_p80)),
+    iv_feature_role_no_other_p80_s = as.vector(scale(iv_feature_role_form_no_other_p80)),
+    iv_feature_role_only_p80_s = as.vector(scale(iv_feature_role_only_p80)),
+    iv_new_entity_p80_s = as.vector(scale(iv_new_entity_p80)),
   ) %>%
   mutate_if(is.numeric, ~replace_na(., 0.))
 ```
-
-```{r}
-min(log(df_all$freq))
-max(log(df_all$freq))
-mean(df_all$log_freq.x)
-```
-
 
 
 ```{r}
@@ -73,109 +197,325 @@ ggplot(df_all, aes(x=log(RT))) +
   geom_histogram() #+
   #scale_x_continuous(limits = c(100, 2000), breaks = seq(0, 2000, 50)) 
 ```
-```{r}
-df_1 = filter(df_all, item == 1)
-shapiro.test(df_1$RT[0:5000])
-```
 
 
 ```{r}
-descdist(log(df_all$RT), discrete=FALSE, boot=500)
-descdist(df_all$RT, discrete=FALSE, boot=500)
+descdist(df_all0$sum_RT, discrete=FALSE, boot=500)
+descdist(log(df_all0$sum_RT), discrete=FALSE, boot=500)
 ```
+
 ```{r}
-df_fit <- df_all %>%
+df_fit <- df_all0 %>%
     filter(item %in% c(1,3,5,7,9))
 ```
 
 ```{r}
-b0 <- lmer(log(RT) ~ surprisal.x + (1|WorkerId),
-           data = df_fit)
-b1 <- lmer(log(RT) ~ surprisal.x + log_freq.x + (1|WorkerId),
-            data = df_fit)
-b2 <- lmer(log(RT) ~ surprisal.x + zone.x + (1|WorkerId),
-            data = df_fit)
-b3 <- lmer(log(RT) ~ surprisal.x + sentence_position.x + (1|WorkerId),
-            data = df_fit)
-b4 <- lmer(log(RT) ~ surprisal.x + sentence_position.x + zone.x + (1|WorkerId),
-            data = df_fit)
-anova(b0,b1)
-anova(b0,b2)
-anova(b0,b3)
-anova(b2,b4)
-```
-
-```{r}
-df_fit0 <- df_fit %>%
-  group_by(item, zone, sentence_id, sentence_position, word) %>%
-  summarise(
-    across(
-      RT:log_freq.x, ~ mean(.x, na.rm = TRUE)
-    )
+base_model <- lmer(
+  sum_RT ~ sentence_id_s + sentence_length_s + (1|WorkerId) + (1|item),
+  data = df_fit
   )
-head(df_fit0)
+
+surp_model <- lmer(
+  sum_RT ~ sum_surprisal_s + sentence_id_s + sentence_length_s + (1|WorkerId) + (1|item),
+  data = df_fit
+)
+
+plot(simulateResiduals(surp_model))
 ```
 
 ```{r}
-b0 <- lm(log(RT) ~ zone.x + log_freq.x,
-            data = df_fit0)
-b1 <- lm(log(RT) ~ surprisal.x + zone.x + log_freq.x,
-            data = df_fit0)
-logLik(b0)
-logLik(b1)
-anova(b0,b1)
+check_collinearity(surp_model)
 ```
 
 ```{r}
-b0 <- glmer(RT ~ word_length.x + sentence_position.x + log_freq.x + (1|item),
-            data = df_fit0, Gamma(link = "log"))
-b1 <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x + (1|item),
-            data = df_fit0, Gamma(link = "log"))
-anova(b0,b1)
-```
-```{r}
-c0 <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x 
-           + iv_feature_role_form_p80 + (1|item),
-           data = df_fit0, Gamma(link = "log"))
-c1 <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x
-          + iv_recurrence_p80 + (1|item),
-          data = df_fit0, Gamma(link = "log"))
-c2 <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x
-          + iv_new_entity_p80 + (1|item),
-          data = df_fit0, Gamma(link = "log"))
-anova(b1,c0, test = "Chisq")
-anova(b1,c1, test = "Chisq")
-anova(b1,c2, test = "Chisq")
-```
-
-```{r}
-fixef(c0)
+anova(base_model, surp_model)
+partR2(surp_model, data = df_fit,  partvars = c("sum_surprisal_s", "sentence_id_s", "sentence_length_s"), nboot = 10)
 ```
 
 
 ```{r}
-#set.seed(42)
-#shuffled_ids = sample(story_ids)
-#test_folds <- split(shuffled_ids, rep(1:10, each=1))
+surp_model_log <- glmmTMB(
+  sum_RT ~ sum_surprisal_s + sentence_id_s + sentence_length_s + (1|WorkerId) + (1|item),
+  data = df_fit,
+  family = Gamma(link = "log")
+)
+```
+
+```{r}
+simulateResiduals(surp_model_log, plot = TRUE)
+```
+
+
+```{r}
+vec_ids <- unique(df_all0$WorkerId)
+sample_id <- sample(vec_ids, 10)
+
+df_all %>%
+  filter(WorkerId %in% sample_id) %>% 
+  ggplot(aes(x = surprisal, y = log(RT))) +
+  geom_point() +
+  facet_wrap(~WorkerId)
+```
+
+```{r}
+surp_model_disp <- glmmTMB(
+  sum_RT ~ sum_surprisal_s + sentence_id_s + sentence_length_s + (1|WorkerId) + (1|item),
+  data = df_fit, family = Gamma(link = "log"), 
+  dispformula = ~ sum_surprisal_s + sentence_id_s + sentence_length_s
+  )
+res_gamma <- simulateResiduals(surp_model_disp, plot = TRUE)
+```
+Actually the lmer looks better, Cullen and Frey plots indicate that the sum of reading times shouldn't be log-transformed!
+
+```{r}
+surp_model <- lmer(
+  sum_RT ~ sum_surprisal_s + sentence_id_s #+ sentence_length_s 
+  # + (1|WorkerId),
+  + (1|item),
+  data = df_all0
+)
+
+surp_model_mean <- lmer(
+  sum_RT ~ mean_surprisal_s + sentence_id_s + sentence_length_s 
+  # + (1|WorkerId),
+  + (1|item),
+  data = df_all0
+)
+
+check_collinearity(surp_model_mean)
+
+iv_model_recurrence_mean <- lmer(
+  sum_RT ~ mean_surprisal_s + sentence_id_s + sentence_length_s 
+  + iv_recurrence_mean_s
+  # + (1|WorkerId),
+  + (1|item),
+  data = df_all0
+)
+
+iv_model_feature_role_form_mean <- lmer(
+  sum_RT ~ mean_surprisal_s + sentence_id_s + sentence_length_s 
+  + iv_feature_role_form_mean_s
+  # + (1|WorkerId), 
+  + (1 |item),
+  data = df_all0
+)
+
+iv_model_new_entity_mean <- lmer(
+  sum_RT ~ mean_surprisal_s + sentence_id_s + sentence_length_s 
+  + iv_new_entity_mean_s
+  # + (1|WorkerId), 
+  + (1 |item),
+  data = df_all0
+)
+
+# not scaled :(
+# iv_model_rec_min <- lmer(
+#   sum_RT ~ sum_surprisal_s + sentence_id_s + sentence_length_s 
+#   + iv_recurrence_min_s
+#   + (1|WorkerId) + (1|item),
+#   data = df_fit
+# )
+
+anova(surp_model, surp_model_mean)
+r2(surp_model)
+r2(surp_model_mean)
+```
+
+Separating sentence length and surprisal helps a bit!
+
+```{r}
+anova(surp_model_mean, iv_model_rec_mean)
+summary(iv_model_rec_mean)
+
+anova(surp_model_mean, iv_model_feature_role_form_mean)
+summary(iv_model_feature_role_form_mean)
+
+anova(surp_model_mean, iv_model_new_entity_mean)
+summary(iv_model_new_entity_mean)
+```
+
+
+We conclude that using the 80 percentile recurrence yields a worse fit! Let's look at R2:
+
+```{r}
+partR2(surp_model_mean, data = df_all0,  partvars = c("mean_surprisal_s", "sentence_id_s", "sentence_length_s"), nboot = 10)
+partR2(iv_model_rec_mean, data = df_all0,  partvars = c("mean_surprisal_s", "sentence_id_s", "sentence_length_s", "iv_recurrence_mean_s"), nboot = 10)
+partR2(iv_model_feature_role_form_mean, data = df_all0,  partvars = c("mean_surprisal_s", "sentence_id_s", "sentence_length_s", "iv_feature_role_form_mean_s"), nboot = 10)
+```
+
+
+```{r}
+# df_fit0 <- df_fit %>%
+#   group_by(item, zone, sentence_id, sentence_position, word) %>%
+#   summarise(
+#     across(
+#       RT:iv_new_entity_p80_s, ~ mean(.x, na.rm = TRUE)
+#     ),
+#     .groups = "drop_last"
+#   )
+```
+
+Averaging over participants (WorkerID) yields much better R2
+
+```{r}
+# base_model0_gau <- glmmTMB(
+#   RT ~ sentence_position_s + zone_s + log_freq_s + word_length_s + (1|item),
+#   data = df_fit0, family = gaussian
+#   )
+# base_model0_log <- glmmTMB(
+#   RT ~ sentence_position_s + zone_s + log_freq_s + word_length_s + (1|item),
+#   data = df_fit0, family = lognormal
+#   )
+# 
+# surp_model0_gau <- glmmTMB(
+#   RT ~ surprisal_s + sentence_position_s + zone_s + log_freq_s + word_length_s + (1|item),
+#   data = df_fit0, family = gaussian
+#   )
+# surp_model0_log <- glmmTMB(
+#   RT ~ surprisal_s + sentence_position_s + zone_s + log_freq_s + word_length_s + (1|item),
+#   data = df_fit0, family = lognormal
+#   )
+
+# surp_model0_log <- glmmTMB(
+#   RT ~ surprisal_s + sentence_position_s + zone_s + log_freq_s + word_length_s + (1|item),
+#   data = df_fit0, family = Gamma(link = "log")
+#   )
+
+# res_gau <- simulateResiduals(surp_model0_log, plot = TRUE)
+# res_log <- simulateResiduals(surp_model0_log_d, plot = TRUE)
+```
+
+
+```{r}
+# anova(base_model0_log,surp_model0_log)
+# fixef(surp_model0_log)
+# r2(base_model0_log)
+# r2(surp_model0_log)
+#partR2(surp_model0, data = df_fit0,  partvars = c("surprisal", "sentence_position", "zone", "log_freq", "word_length"), nboot = 10)
+
+# check if de varda and marelli included zone!
+# --> They don't
+```
+
+```{r}
+# surp_model0_s <- lmer(
+#   RT ~ surprisal_s + sentence_position_s + zone_s + log_freq_s + word_length_s + (1|item),
+#   data = df_fit0
+#   )
+# 
+# feature_role_model0_s <- lmer(
+#   RT ~ surprisal_s + word_length_s + sentence_position_s + log_freq_s + zone_s
+#   + iv_feature_role_form_p80_s 
+#   + (1|item),
+#     data = df_fit0
+#   )
+# recurrence_model0_s <- lmer(
+#   RT ~ surprisal_s + word_length_s + sentence_position_s + log_freq_s + zone_s
+#   + iv_recurrence_p80_s 
+#   + (1|item),
+#     data = df_fit0
+#   )
+# new_entity_model0_s <- lmer(
+#   RT ~ surprisal_s + word_length_s + sentence_position_s + log_freq_s + zone_s
+#   + iv_new_entity_p80_s 
+#   + (1|item),
+#   data = df_fit0
+#   )
+```
+
+Adding entity IVs marginally improves model fit, but r2 for iv features is very small
+
+```{r}
+# anova(feature_role_model0_s,surp_model0_s, test = "Chisq")
+# fixef(feature_role_model0_s)
+# partR2(feature_role_model0_s, data = df_fit0,  partvars = c("surprisal_s", "sentence_position_s", "log_freq_s", "zone_s", "word_length_s", "iv_feature_role_form_p80_s"), nboot = 10)
+
+# anova(recurrence_model0_s,surp_model0_s, test = "Chisq")
+# fixef(recurrence_model0_s)
+# partR2(recurrence_model0_s, data = df_fit0,  partvars = c("surprisal_s", "sentence_position_s", "log_freq_s", "zone_s", "word_length_s", "iv_recurrence_p80_s"), nboot = 10)
+
+# anova(new_entity_model0_s,surp_model0_s, test = "Chisq")
+# fixef(new_entity_model0_s)
+# partR2(new_entity_model0_s, data = df_fit0,  partvars = c("surprisal_s", "sentence_position_s", "log_freq_s", "zone_s", "word_length_s", "iv_new_entity_p80_s"), nboot = 10)
+```
+
+
+```{r}
+story_ids <- unique(df_all$item)
 
 cross_validate <- function(df) {
+  
+  df_res <- data.frame(
+    test_id = numeric(),
+    model = character(),
+    rmse_base = numeric(),
+    rmse_iv = numeric(),
+    log_lik_base = numeric(),
+    log_lik_iv = numeric(),
+    r2_base = numeric(),
+    r2_iv = numeric()
+  )
+  
   for (test_id in 1:10) {
     train_ids <- setdiff(story_ids, c(test_id))
     df_test <- df %>% filter(item == test_id)
     df_train <- df %>% filter(item %in% train_ids)
-    b_i <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x 
-                 + (1|item) + (1|WorkerId),
-                 data = df_train, Gamma(link = "log"))
-    c_i <- glmer(RT ~ surprisal.x + word_length.x + sentence_position.x + log_freq.x 
-                 + iv_new_entity_p80
-                 + (1|item) + (1|WorkerId),
-                 data = df_train, Gamma(link = "log"))
-    anova(b_i, c_i, test = "Chisq")
+    
+    # base model with only surprisal, position of the sentence in the story, 
+    # and sentence length as predictors
+    base_model <- lmer(
+      sum_RT ~ mean_surprisal_s + sentence_id_s + sentence_length_s + (1|item),
+      data = df_train, REML = FALSE
+    )
+    
+    # evaluate base model
+    log_lik_base <- logLik(base_model)
+    pred_RTs_base <- predict(base_model, newdata = df_test, allow.new.levels = TRUE)
+    rmse_base <- sqrt(mean((pred_RTs_base-df_test$sum_RT)^2))
+    
+    iv_model_recurrence_mean <- lmer(
+      sum_RT ~ mean_surprisal_s + sentence_id_s + sentence_length_s + iv_recurrence_mean_s + (1|item),
+      # + (1|WorkerId),
+      data = df_train, REML = FALSE
+    )
+    
+    iv_model_feature_role_form_mean <- lmer(
+      sum_RT ~ mean_surprisal_s + sentence_id_s + sentence_length_s + iv_feature_role_form_mean_s + (1 |item),
+      # + (1|WorkerId), 
+      data = df_train, REML = FALSE
+    )
+    
+    iv_model_new_entity_mean <- lmer(
+      sum_RT ~ mean_surprisal_s + sentence_id_s + sentence_length_s + iv_new_entity_mean_s + (1 |item),
+      # + (1|WorkerId), 
+      data = df_train, REML = FALSE
+    )
+    
+    model_list <- list(list("recurrence", iv_model_recurrence_mean), 
+                       list("feature_role", iv_model_feature_role_form_mean), 
+                       list("new_entity", iv_model_new_entity_mean))
+    
+    for (iv in model_list) {
+      iv_name <- iv[[1]]
+      iv_model <- iv[[2]]
+      log_lik_iv <- logLik(iv_model)
+      pred_RTs_iv <- predict(iv_model, newdata = df_test, allow.new.levels = TRUE)
+      rmse_iv <- sqrt(mean((pred_RTs_iv-df_test$sum_RT)^2))
+      df_res <- df_res %>%
+        add_row(
+          test_id = test_id,
+          model = iv_name,
+          rmse_base = rmse_base,
+          rmse_iv = rmse_iv,
+          log_lik_base = as.numeric(log_lik_base),
+          log_lik_iv = as.numeric(log_lik_iv),
+          r2_base = as.numeric(r2(base_model)),
+          r2_iv = as.numeric(r2(iv_model))
+        )
+    }
   }
+  return(df_res)
 }
-```
-
-```{r}
-cross_validate(df_all)
+df_res <- cross_validate(df_all0)
 ```
 
