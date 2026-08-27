@@ -1,11 +1,13 @@
-# from argparse import ArgumentParser
+from argparse import ArgumentParser
 from minicons import scorer
 import numpy as np
 import csv
 from collections import defaultdict
-# from itertools import chain
+from pathlib import Path
 import torch
 from tqdm import tqdm
+
+import re
 
 from typing import List, Tuple
 
@@ -17,16 +19,17 @@ elif torch.mps.is_available():
 print(f"Using device: {device}")
 
 NATURAL_STORIES_TOK_FILE = "naturalstories/naturalstories_RTS/all_stories.tok"
-OUTPUT_FILE = "naturalstories/naturalstories_RTS/stories_surprisa_pythia_70m_step1000.tsv"
 
 
-# def parse_args():
-# 	parser = ArgumentParser()
-# 	parser.add_argument("--window-size", type=int, default=2048)
-# 	parser.add_argument("--stride", type=int, default=1)
-# 	parser.add_argument("--batch-size", type=int, default=16)
-# 	parser.add_argument("--out-file", type=str, default="naturalstories/naturalstories_RTS/stories_surprisal.tsv")
-# 	return parser.parse_args()
+def parse_args():
+	parser = ArgumentParser()
+	parser.add_argument("--model-name-or-path", type=str, default="EleutherAI/pythia-70m-deduped")
+	parser.add_argument("--revision", type=str, default=None)
+	parser.add_argument("--window-size", type=int, default=None)
+	parser.add_argument("--output-dir", type=str, default="annotated/surprisal")
+	# parser.add_argument("--stride", type=int, default=1)
+	# parser.add_argument("--batch-size", type=int, default=8)
+	return parser.parse_args()
 
 
 # def _compile_stimuli(story_words: List[str], window_size: int, stride: int, tokenizer) -> List[str]:
@@ -50,7 +53,7 @@ OUTPUT_FILE = "naturalstories/naturalstories_RTS/stories_surprisa_pythia_70m_ste
 # 	return stimuli
 
 
-# def _score(stimuli: List[str], scorer: scorer.IncrementalLMScorer, batch_size: int) -> List[Tuple[str, float]]:
+# def _score_batched(stimuli: List[str], scorer: scorer.IncrementalLMScorer, batch_size: int) -> List[Tuple[str, float]]:
 # 	scores = []
 # 	for idx in range(batch_size, len(stimuli)+batch_size, batch_size):
 # 		batch_stimuli = stimuli[idx-batch_size:idx]
@@ -58,9 +61,20 @@ OUTPUT_FILE = "naturalstories/naturalstories_RTS/stories_surprisa_pythia_70m_ste
 # 			batch=batch_stimuli,
 # 			base_two=True,
 # 			bow_correction=True
-# 		)
+# 		)s
 # 		scores.extend(batch_scores)
 # 	return scores
+
+def _get_out_file_name(args):
+	out_file_prefix = f"{args.model_name_or_path.split("/")[-1]}"
+	if args.revision:
+		out_file_prefix += f"-{args.revision}"
+	if args.window_size:
+		out_file_prefix += f"-{args.window_size}"
+	else:
+		out_file_prefix += "-full"
+	out_file_name = out_file_prefix + ".tsv"
+	return out_file_name
 
 
 def _get_word_scores(token_scores: List[Tuple[str, float]]) -> List[float]:
@@ -77,15 +91,22 @@ def _get_word_scores(token_scores: List[Tuple[str, float]]) -> List[float]:
 
 def main():
 
-	# args = parse_args()
+	args = parse_args()
 	from transformers import AutoTokenizer
-	tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m-deduped")
+	tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+	# should use revision="step1000"
 	ilm_scorer = scorer.IncrementalLMScorer(
-		model="EleutherAI/pythia-70m-deduped", tokenizer=tokenizer, device=device, revision="step1000")
+		model=args.model_name_or_path, tokenizer=tokenizer, device=device, revision=args.revision)
 	tokenizer = ilm_scorer.tokenizer
 
+	if not Path(args.output_dir).exists():
+		Path(args.output_dir).mkdir(parents=True)
+
+	out_file_name = _get_out_file_name(args)
+	out_file_path = Path(args.output_dir) / out_file_name
+	f_out = open(out_file_path, "w")
+
 	csv_header = ["word", "item", "zone", "sentence_id", "sentence_position", "surprisal"]
-	f_out = open(OUTPUT_FILE, "w")
 	csvwriter = csv.writer(f_out, delimiter="\t", quoting=csv.QUOTE_MINIMAL)
 	csvwriter.writerow(csv_header)
 		
@@ -99,18 +120,24 @@ def main():
 
 	for story_id, story_words in tqdm(words_by_story.items()):
 
-		story_words.insert(0, tokenizer.bos_token)
-		token_scores = ilm_scorer.token_score(" ".join(story_words))
-		word_scores = _get_word_scores(token_scores[0]) # skip bos token
-		# make sure no token was lost on the way
-		assert len(word_scores) == len(story_words), len(story_words) -len(word_scores)
+		# no window size provided -> assume that stories fit in the context of the model
+		if not args.window_size:
+			story_words.insert(0, tokenizer.bos_token)
+			token_scores = ilm_scorer.token_score(" ".join(story_words))
+			word_scores = _get_word_scores(token_scores[0]) # skip bos token
+			# make sure no token was lost on the way
+			assert len(word_scores) == len(story_words), len(story_words) -len(word_scores)
 
-		# # tokenize and compile stimuli with at least window_size tokens in the context
-		# stimuli = _compile_stimuli(story_words, args.window_size, args.stride, tokenizer)
-		# # detokenize
-		# stimuli = [tokenizer.decode(stimulus) for stimulus in stimuli]
-		# token_scores = _score(stimuli, scorer=ilm_scorer, batch_size=args.batch_size)
-		# word_scores = [_get_word_score(stimulus_score[1:]) for stimulus_score in token_scores]
+		else:
+			# for now complain
+			raise Exception
+			
+			# # tokenize and compile stimuli with at least window_size tokens in the context
+			# stimuli = _compile_stimuli(story_words, args.window_size, args.stride, tokenizer)
+			# # detokenize
+			# stimuli = [tokenizer.decode(stimulus) for stimulus in stimuli]
+			# token_scores = _score(stimuli, scorer=ilm_scorer, batch_size=args.batch_size)
+			# word_scores = [_get_word_score(stimulus_score[1:]) for stimulus_score in token_scores]
 
 		# save with sentence ids and sentence positions
 		sentence_id = 1
@@ -118,7 +145,7 @@ def main():
 		for story_position, (word, score) in enumerate(zip(story_words[1:], word_scores[1:]), start=1):
 			csvwriter.writerow([word, story_id, story_position, sentence_id, sentence_position, score])
 			sentence_position += 1
-			if (word.endswith(".") or word.endswith(".'")) and not word in ["Mr.", "Dr."]:
+			if re.search(r"[.!?]'?$", word) and not word in ["Mr.", "Dr."]:
 				sentence_id += 1
 				sentence_position = 1
 
