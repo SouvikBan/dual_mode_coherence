@@ -6,13 +6,13 @@ from conllu import parse_incr
 csv_header = ["story_id", "sent_id", "token_id", "deprel", "form", "GRP", "etype", "infstat", "minspan", "link", "identity"]
 
 
-if not Path("to_annotate").exists():
-    Path("to_annotate").mkdir()
+if not Path("../to_annotate").exists():
+    Path("../to_annotate").mkdir()
 
 sent_id_decr = 0
 current_story_id = "1"
 
-f_story = open(f"to_annotate/story_{current_story_id}_coref.csv", "w")
+f_story = open(f"../to_annotate/story_{current_story_id}_coref.csv", "w")
 csvwriter = csv.writer(f_story, delimiter=";", quoting=csv.QUOTE_MINIMAL)
 
 with open("naturalstories/parses/ud/stories-aligned.conllx", "r") as f:

@@ -38,7 +38,7 @@ import csv
 import json
 from collections import defaultdict
 
-from annotate import load_spacy, build_coref
+from dual_mode_coherence.annotation import load_spacy, build_coref
 
 
 def iter_jsonl(path):

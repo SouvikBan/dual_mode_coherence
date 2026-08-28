@@ -1,3 +1,9 @@
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "minicons>=0.3.39",
+# ]
+# ///
 from argparse import ArgumentParser
 from minicons import scorer
 import csv

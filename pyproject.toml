@@ -1,0 +1,23 @@
+[project]
+name = "dual-mode-coherence"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Julius Steuer", email = "juliussteuer87@gmail.com" },
+    { name = "Souvik Banerjee", email = "souvik.banerjee@h-its.org"}
+    
+]
+requires-python = ">=3.12"
+dependencies = [
+    "maverick-coref>=1.0.7",
+    "minicons>=0.3.39",
+    "spacy>=3.8.16",
+]
+
+[project.scripts]
+dual-mode-coherence = "dual_mode_coherence:main"
+
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13.0"]
+build-backend = "uv_build"
