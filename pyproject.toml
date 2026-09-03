@@ -13,6 +13,7 @@ dependencies = [
     "maverick-coref>=1.0.7",
     "minicons>=0.3.39",
     "spacy>=3.8.16",
+    "transformers==5.2.0",
 ]
 
 [project.scripts]

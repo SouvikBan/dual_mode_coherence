@@ -28,7 +28,7 @@ def parse_args():
 	parser.add_argument("--model-name-or-path", type=str, default="EleutherAI/pythia-70m-deduped")
 	parser.add_argument("--revision", type=str, default=None)
 	parser.add_argument("--window-size", type=int, default=None)
-	parser.add_argument("--output-dir", type=str, default="annotated/surprisal")
+	parser.add_argument("--output-dir", type=str, default="annotated/surprisal/naturalstories")
 	# parser.add_argument("--stride", type=int, default=1)
 	# parser.add_argument("--batch-size", type=int, default=8)
 	return parser.parse_args()
@@ -146,7 +146,7 @@ def main():
 	out_file_path = Path(args.output_dir) / out_file_name
 	f_out = open(out_file_path, "w")
 
-	csv_header = ["word", "item", "zone", "sentence_id", "sentence_position", "surprisal"]
+	csv_header = ["word", "item", "zone", "sentence_id", "surprisal"]
 	csvwriter = csv.writer(f_out, delimiter="\t", quoting=csv.QUOTE_MINIMAL)
 	csvwriter.writerow(csv_header)
 
