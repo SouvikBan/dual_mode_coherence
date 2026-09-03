@@ -1,0 +1,102 @@
+```{r}
+library(dplyr)
+library(tidyverse)
+library(glue)
+library(readr)
+library(stringr)
+```
+
+```{r}
+clasp_with_context <- read.csv("../BLL2018/data/raw_with_context_mturk.csv", sep = ",") %>%
+  subset(select = c(
+    'WorkerId', 'WorkTimeInSeconds', 'Input.sent00',
+    'Input.sent00id', 'Input.prefix00', 'Input.prefixextra00',
+    'Input.suffix00', 'Input.suffixextra00', 'Input.sent01',
+    'Input.sent01id', 'Input.prefix01', 'Input.prefixextra01',
+    'Input.suffix01', 'Input.suffixextra01', 'Input.sent02',
+    'Input.sent02id', 'Input.prefix02', 'Input.prefixextra02',
+    'Input.suffix02', 'Input.suffixextra02', 'Input.sent03',
+    'Input.sent03id', 'Input.prefix03', 'Input.prefixextra03',
+    'Input.suffix03', 'Input.suffixextra03', 'Input.sent04',
+    'Input.sent04id', 'Input.prefix04', 'Input.prefixextra04',
+    'Input.suffix04', 'Input.suffixextra04', 'Answer.sent00',
+    'Answer.sent01', 'Answer.sent02', 'Answer.sent03', 'Answer.sent04',
+    'Answer.sentid', 'Approve', 'Reject'
+  )) %>%
+  select(where(~!all(is.na(.))))
+
+clasp_no_context <- read.csv("../BLL2018/data/raw_no_context_mturk.csv", sep = ",") %>%
+  subset(select = c(
+    'WorkerId', 'WorkTimeInSeconds', 'Input.sent00', 'Input.sent00id', 
+    'Input.sent01', 'Input.sent01id', 'Input.sent02', 'Input.sent02id', 
+    'Input.sent03', 'Input.sent03id', 'Input.sent04', 'Input.sent04id',
+    'Answer.sent00', 'Answer.sent01', 'Answer.sent02', 'Answer.sent03', 
+    'Answer.sent04', 'Answer.sentid', 'Approve', 'Reject'
+  )) %>%
+  select(where(~!all(is.na(.))))
+```
+
+```{r}
+clasp_with_context_pivoted <- data.frame(
+  WorkerId = factor(),
+  WorkerTimeInSeconds = double(),
+  sent = character(),
+  sent_id = integer(),
+  prefix = character(),
+  prefixextra = character(),
+  suffix = character(),
+  suffixextra = character(),
+  answer = integer()
+)
+
+for (sentid in c("00", "01", "02", "03", "04")) {
+  sentid_df <- clasp_with_context %>%
+    select(
+      'WorkerId', 'WorkTimeInSeconds', 
+      glue('Input.sent{sentid}'),
+      glue('Input.sent{sentid}id'), 
+      glue('Input.prefix{sentid}'), 
+      glue('Input.prefixextra{sentid}'),
+      glue('Input.suffix{sentid}'), 
+      glue('Input.suffixextra{sentid}'), 
+      glue('Answer.sent{sentid}')
+    )
+  colnames(sentid_df) <- c("WorkerId", "WorkerTimeInSeconds", "sent", "sent_id", "prefix", "prefixextra", "suffix", "suffixextra", "answer")
+  clasp_with_context_pivoted <- bind_rows(clasp_with_context_pivoted, sentid_df)
+}
+clasp_with_context_pivoted <- clasp_with_context_pivoted %>%
+  mutate(
+    answer = as.factor(answer),
+    lang_id = ifelse(nchar(sent_id) < 3, "0", substr(as.character(sent_id), 1, 1)),
+  )
+write_csv(clasp_with_context_pivoted, "../BLL2018/data/clasp_with_context_by_worker_and_sent.csv")
+```
+
+```{r}
+clasp_no_context_pivoted <- data.frame(
+  WorkerId = factor(),
+  WorkerTimeInSeconds = double(),
+  sent = character(),
+  sent_id = integer(),
+  answer = integer()
+)
+
+for (sentid in c("00", "01", "02", "03", "04")) {
+  sentid_df <- clasp_with_context %>%
+    select(
+      'WorkerId', 'WorkTimeInSeconds', 
+      glue('Input.sent{sentid}'),
+      glue('Input.sent{sentid}id'), 
+      glue('Answer.sent{sentid}')
+    )
+  colnames(sentid_df) <- c("WorkerId", "WorkerTimeInSeconds", "sent", "sent_id", "answer")
+  clasp_no_context_pivoted <- bind_rows(clasp_no_context_pivoted, sentid_df)
+}
+clasp_no_context_pivoted <- clasp_no_context_pivoted %>%
+  mutate(
+    answer = as.factor(answer),
+    lang_id = ifelse(nchar(sent_id) < 3, "0", substr(as.character(sent_id), 1, 1)),
+  )
+write_csv(clasp_no_context_pivoted, "../BLL2018/data/clasp_no_context_by_worker_and_sent.csv")
+```
+
