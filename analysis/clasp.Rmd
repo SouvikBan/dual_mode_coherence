@@ -1,0 +1,235 @@
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyverse)
+library(performance)
+# library(lme4)
+library(partR2)
+library(fitdistrplus)
+library(glmmTMB)
+# library(glmm.hp)
+# library(r2glmm)
+library(plotrix)
+library(DHARMa)
+library(MASS)
+# library(broom.mixed)
+
+source("k_fold_cross_validation.R")
+```
+
+```{r}
+clasp_surp_with_context <- read.csv("../annotated/surprisal/clasp/clasp_with_context_by_worker_and_sent/pythia-1.4b-deduped-step1000-full.tsv", sep = "\t") %>%
+  mutate(
+    answer = as.numeric(answer),
+    lang_id = as.factor(lang_id),
+    prefix_length = str_count(prefix, " ") + 1,
+    sent_length = str_count(sent, " ") + 1,
+    suffix_length = str_count(suffix, " ") + 1,
+    input_length = prefix_length + sent_length,
+    mean_surprisal = sentence_surprisal/sent_length
+  ) %>%
+  filter(!is.na(answer))
+# clasp_surp_no_context <- read.csv("annotated/surprisal/clasp/clasp_no_context_by_worker_and_sent/pythia-1.4b-deduped-step1000-full.tsv", sep = "\t") %>%
+#   mutate(lang_id = as.factor(lang_id))
+
+# clasp_surp <- bind_rows(clasp_surp_with_context, clasp_surp_no_context)
+```
+
+```{r}
+ggplot(clasp_surp_with_context, aes(x = lang_id, y = mean_surprisal, fill = as.factor(answer))) + 
+  geom_boxplot() +
+  scale_fill_viridis_d(direction = -1) +
+  theme_bw() +
+  labs(x = "Language", y = "Mean Sent Surprisal", fill = "Answer")
+```
+```{r}
+ggplot(clasp_surp_with_context, aes(x = as.factor(answer), y = prefix_length, fill = as.factor(lang_id))) + 
+  geom_boxplot() +
+  theme_bw() +
+  labs(x = "Answer", y = "Prefix Length", , fill = "Language")
+```
+
+```{r}
+clasp_surp_with_context %>%
+  subset(select = -c(lang_id)) %>%
+  group_by(sent_id) %>%
+  summarise(
+    across(answer:mean_surprisal, mean, na.rm = TRUE)
+  ) %>%
+ggplot(aes(x = input_length, y = mean_surprisal, fill = answer)) +
+  geom_point(shape = 21, size = 2.5, color = "black") +
+  scale_fill_viridis_c() +
+  theme_bw()
+```
+
+```{r}
+clasp_surp_with_context0 <- clasp_surp_with_context %>%
+  subset(select = -c(lang_id)) %>%
+  group_by(sent_id, WorkerId) %>%
+  summarise(
+    across(answer:mean_surprisal, mean, na.rm = TRUE),
+    .groups = "drop_last"
+  ) %>%
+  ungroup() %>%
+  mutate(
+    sentence_surprisal_s = scale(sentence_surprisal),
+    prefix_length_s = scale(prefix_length),
+    suffix_length_s = scale(suffix_length),
+    sent_length_s = scale(sent_length),
+    mean_surprisal_s = scale(mean_surprisal),
+    input_length_s = scale(input_length),
+    # for beta family we need values striclty < 1 and > 0
+    answer_s = scales::rescale(answer, to = c(0.001, 0.999))
+  )
+```
+
+```{r}
+ggplot(clasp_surp_with_context0) +
+  geom_histogram(aes(x = answer), bins = 20) +
+  theme_bw()
+```
+
+```{r}
+descdist(clasp_surp_with_context0$answer_s, discrete=FALSE, boot=500)
+```
+
+```{r}
+sum(is.na(clasp_surp_with_context0$mean_surprisal_s))
+sum(is.na(clasp_surp_with_context0$sent_length_s))
+sum(is.na(clasp_surp_with_context0$prefix_length_s))
+```
+
+```{r}
+clasp_ivs <- read.csv("../iv_results/clasp/iv_temp_125.csv") %>%
+  group_by(document_id) %>%
+  summarize(
+    across(d1_recurrence_uniform_n_valid:d_semantic_euclidean_min, mean, na.rm = TRUE)
+  ) %>%
+  mutate(
+    document_id = as.integer(str_sub(document_id, 7, 10))
+  ) %>%
+  rename(
+    sent_id = document_id
+  )
+fit_df <- merge(x = clasp_surp_with_context0, y = clasp_ivs,  by = c("sent_id"), all.x = TRUE) %>%
+  mutate(
+    across(
+      sentence_surprisal:d_semantic_euclidean_min, ~as.numeric(scale(.x)), .names = "{.col}_s"
+    )
+  )
+# sample an exploratory set of half of the participants
+sampled_WorkerIds <- fit_df %>%
+  pull(WorkerId) %>%
+  sample(size = 75)
+expl_df <- fit_df %>%
+  filter(WorkerId %in% sampled_WorkerIds)
+
+```
+
+Model selection
+
+```{r}
+# intercept-only model (how much is the rating affected by the identity of the participant?)
+m0 <- glmmTMB(answer_s ~ 1 + (1|WorkerId), data = expl_df, family = gaussian())
+r2(m0)
+```
+
+```{r}
+# context model - does the amount of context (number of words) matter for the rating?
+m_context <- glmmTMB(answer_s ~ prefix_length_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m_context, m0)
+```
+No improvement over intercept-only model -> discard
+
+```{r}
+# missing context model - how important is the amount of text the participant hasn't seen yet?
+m_missing_context <- glmmTMB(answer_s ~ suffix_length_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m0, m_missing_context)
+summary(m_missing_context)
+```
+
+This effect is vanishingly small -> discard!
+
+```{r}
+# sentence-length model
+m_sent_length <- glmmTMB(answer_s ~ sent_length_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m0, m_sent_length)
+```
+
+No effect of sentence length either!
+
+```{r}
+m_surprisal <- glmmTMB(answer_s ~ mean_surprisal_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m0, m_surprisal)
+```
+
+
+```{r}
+m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m_surprisal, m_ivs)
+anova(m_ivs0, m_ivs1)
+```
+
+```{r}
+m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m_surprisal, m_ivs)
+anova(m_ivs0, m_ivs1)
+```
+
+```{r}
+m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m_surprisal, m_ivs)
+anova(m_ivs0, m_ivs1)
+```
+```{r}
+m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m_surprisal, m_ivs)
+anova(m_ivs0, m_ivs1)
+```
+
+```{r}
+m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
+m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m_surprisal, m_ivs)
+anova(m_ivs0, m_ivs1)
+```
+
+
+Defining models
+
+```{r}
+m0_formula <- answer_s ~ mean_surprisal_s + (1|WorkerId)
+m1_formula <- answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId)
+```
+
+
+Cross-validation
+
+```{r}
+set.seed(123)
+results <- model_cross_val(m0_formula, m1_formula, fit_df, model_family=beta_family, group_var = "WorkerId", num_folds = 5)
+```
+
+
+```{r}
+cv_summary <- results$cv_summary
+fixef_summary <- results$fixef_summary
+cat("\nMean delta log-likelihood per item (m1 - m0):", mean(cv_summary$delta_ll, na.rm = TRUE), "\n")
+cat("Mean RMSE m0:", mean(cv_summary$rmse0, na.rm = TRUE), "\n")
+cat("Mean RMSE m1:", mean(cv_summary$rmse1, na.rm = TRUE), "\n")
+cat("Mean delta RMSE (m1 - m0):", mean(cv_summary$delta_rmse, na.rm = TRUE), "\n")
+cat("Mean delta marginal R2:", mean(cv_summary$delta_r2m, na.rm = TRUE), "\n")
+cat("Mean delta conditional R2:", mean(cv_summary$delta_r2c, na.rm = TRUE), "\n")
+```
+```{r}
+fixef_summary %>%
+  group_by(term) %>%
+  summarise(
+    across(everything(), mean, na.rm = TRUE)
+  )
+```
+
+
