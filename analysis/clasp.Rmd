@@ -99,7 +99,7 @@ sum(is.na(clasp_surp_with_context0$prefix_length_s))
 ```
 
 ```{r}
-clasp_ivs <- read.csv("../iv_results/clasp/iv_temp_125.csv") %>%
+clasp_ivs <- read.csv("../iv_temp_125_union/clasp/iv_temp_125.csv") %>%
   group_by(document_id) %>%
   summarize(
     across(d1_recurrence_uniform_n_valid:d_semantic_euclidean_min, mean, na.rm = TRUE)
@@ -137,6 +137,7 @@ r2(m0)
 # context model - does the amount of context (number of words) matter for the rating?
 m_context <- glmmTMB(answer_s ~ prefix_length_s + (1|WorkerId), data = expl_df, gaussian())
 anova(m_context, m0)
+r2(m_context)
 ```
 No improvement over intercept-only model -> discard
 
@@ -161,40 +162,54 @@ No effect of sentence length either!
 m_surprisal <- glmmTMB(answer_s ~ mean_surprisal_s + (1|WorkerId), data = expl_df, gaussian())
 anova(m0, m_surprisal)
 ```
+```{r}
+# check residuals
+plot(simulateResiduals(m_surprisal))
+```
 
 
 ```{r}
 m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
 m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs)
+anova(m_surprisal, m_ivs0)
 anova(m_ivs0, m_ivs1)
 ```
 
 ```{r}
 m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
 m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs)
+anova(m_surprisal, m_ivs0)
 anova(m_ivs0, m_ivs1)
 ```
 
 ```{r}
 m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
 m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs)
+anova(m_surprisal, m_ivs0)
 anova(m_ivs0, m_ivs1)
 ```
 ```{r}
 m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
 m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs)
+anova(m_surprisal, m_ivs0)
 anova(m_ivs0, m_ivs1)
 ```
 
 ```{r}
 m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
 m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs)
+anova(m_surprisal, m_ivs0)
 anova(m_ivs0, m_ivs1)
+```
+```{r}
+m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d3_transition_mean_s + (1|WorkerId), data = expl_df, gaussian())
+m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + (1|WorkerId), data = expl_df, gaussian())
+anova(m_surprisal, m_ivs0)
+anova(m_ivs0, m_ivs1)
+```
+```{r}
+# check residuals
+plot(simulateResiduals(m_ivs1))
 ```
 
 
@@ -202,7 +217,13 @@ Defining models
 
 ```{r}
 m0_formula <- answer_s ~ mean_surprisal_s + (1|WorkerId)
-m1_formula <- answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId)
+m1_formula <- answer_s ~ mean_surprisal_s + 
+                         d_syntactic_1gram_mean_s + 
+                         d_semantic_cosine_mean_s + 
+                         d1_recurrence_exponential_mean_s + 
+                         d2_new_head_mean_s + 
+                         d3_transition_mean_s + 
+                         (1|WorkerId)
 ```
 
 
@@ -226,10 +247,14 @@ cat("Mean delta conditional R2:", mean(cv_summary$delta_r2c, na.rm = TRUE), "\n"
 ```
 ```{r}
 fixef_summary %>%
+  dplyr::select(!c("fold")) %>%
   group_by(term) %>%
   summarise(
     across(everything(), mean, na.rm = TRUE)
-  )
+  ) %>%
+  write.csv("results/clasp_fixefs.csv")
+
+write.csv(cv_summary, "results/clasp_cv_summary.csv")
 ```
 
 
