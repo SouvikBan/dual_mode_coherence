@@ -68,6 +68,7 @@ clasp_with_context_pivoted <- clasp_with_context_pivoted %>%
   mutate(
     answer = as.factor(answer),
     lang_id = ifelse(nchar(sent_id) < 3, "0", substr(as.character(sent_id), 1, 1)),
+    sent_id = as.integer(str_sub(as.character(sent_id), -2, -1))
   )
 write_csv(clasp_with_context_pivoted, "../BLL2018/data/clasp_with_context_by_worker_and_sent.csv")
 ```
@@ -96,6 +97,7 @@ clasp_no_context_pivoted <- clasp_no_context_pivoted %>%
   mutate(
     answer = as.factor(answer),
     lang_id = ifelse(nchar(sent_id) < 3, "0", substr(as.character(sent_id), 1, 1)),
+    sent_id = as.integer(str_sub(as.character(sent_id), -2, -1))
   )
 write_csv(clasp_no_context_pivoted, "../BLL2018/data/clasp_no_context_by_worker_and_sent.csv")
 ```
