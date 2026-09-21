@@ -20,7 +20,7 @@ Stages 3 and 4 are independent: the counts need only the gold annotation.
 `en_core_web_sm` installs automatically as a dependency. Everything below is
 run with `uv run python <script>` from this directory.
 
-## The coreference model is not vendored
+## The coreference model
 
 Stage 2 runs CorPipe, which is **not** included here. `corpipe26_seeded.py`
 loads an upstream `corpipe26_twostage.py` at run time and drives it with a
@@ -84,9 +84,16 @@ command skips items that already have a part file.
         --workers-per-gpu 2 --cpu-threads 4 -- \
         --raw-dir raw_clasp_vllm \
         --clasp-gold processed_ratings.csv \
-        --clasp-annotation-dir <manual CLASP token CSVs> \
         --corpipe-source <path to corpipe26_twostage.py> \
         --stanza-gpu --n 90 --out-dir annotated_alternatives
+
+CLASP needs only `processed_ratings.csv`, the BLL2018 release file. There is no
+gold entity annotation to supply: CorPipe annotates the context, the target and
+every alternative, so the context is tokenised and sentence-split by Stanza
+straight from the `Pre-Context` text, exactly as an alternative is. If you do
+have manually annotated token CSVs, `--clasp-annotation-dir` uses their
+tokenisation instead; it is optional, and their entity layer is overwritten by
+CorPipe either way.
 
 Both write into the same output directory but touch different subfolders, so
 they can run at the same time. `run_parallel.py` merges the per-item part files
@@ -112,14 +119,7 @@ point the part files are intact and rerunning the command completes the merge.
 | `count_entities_ns.py`, `count_entities_clasp.py` | stage 4b, accumulate those per item |
 | `read_ns_annotation.py` | reads the manual story CSVs and their entity brackets |
 
-There is one annotation script per dataset rather than a generic one plus a
-configuration wrapper. The choices that distinguish the pipelines are fixed
-inside each script, in its `FIXED` list, and passing them again on the command
-line is refused: on Natural Stories the target and the alternatives must be
-annotated by the same CorPipe pass over Stanza syntax, and on CLASP the context
-is annotated by CorPipe too. A target annotated differently from its
-alternatives would make the comparison between them meaningless, so these are
-not options.
+
 
 ## 3. Calculate Information Value
 
@@ -196,9 +196,7 @@ These use the gold annotation only. No alternatives and no language model.
         --out-dir mention_costs
 
 The CLASP source matters. The counts must come from the same annotation as the
-CLASP information-value files, which is the stage 2 output, not the manual
-token CSVs: the two disagree on the mention count for roughly two thirds of
-targets.
+CLASP information-value files, which is the stage 2 output.
 
 **Step two**, accumulate them per item:
 
@@ -224,10 +222,6 @@ entity brackets.
 
 `sentence_index` in the information-value files and `sent_id` in the Natural
 Stories counts are both **0-based**, matching the manual annotation CSVs.
-Natural Stories reading-time data numbers sentences from 1, so that join needs
-`+ 1`. On CLASP the unit is `item_id`, written `clasp_<id>::<Language>`, because
-the five language versions of a context are separate targets sharing one
-context.
 
 ## Verifying an install
 
@@ -238,5 +232,4 @@ should match exactly.
 
 Stage 3 is deterministic too, except for the two `d_semantic_*` channels, which
 differ by around 1e-7 between CPU and GPU because the embeddings are computed in
-floating point on different hardware. The other 39 of the 45 columns are
-bit-identical across devices.
+floating point on different hardware. 

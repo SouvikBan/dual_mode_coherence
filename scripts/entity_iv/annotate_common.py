@@ -388,6 +388,41 @@ class StanzaUD:
                         out.append(ValueError(f"stanza: {error}"))
         return out
 
+    def parse_document(self, text: str) -> list:
+        """Every sentence of a multi-sentence text, in the project's sentence
+        format. parse_many insists on one sentence per text because an
+        alternative must be a single sentence; a CLASP pre-context is a whole
+        passage, so it needs its own entry point. Character offsets are
+        relative to `text`."""
+        flat = self.one_line(text)
+        if not flat.strip():
+            return []
+        document = self.raw(flat)
+        out = []
+        for index, parsed in enumerate(document.sentences):
+            tokens = []
+            for token in parsed.tokens:
+                for word in token.words:
+                    start = getattr(word, "start_char", None)
+                    end = getattr(word, "end_char", None)
+                    if start is None or end is None or len(token.words) > 1:
+                        start, end = token.start_char, token.end_char
+                    item = self._word(word)
+                    if not item["text"] or item["text"] == "<UNK>":
+                        item["text"] = flat[start:end]
+                    item["lemma"] = item["lemma"] or item["text"]
+                    item.update(deps="_", misc="_", char_start=int(start), char_end=int(end),
+                                grammar_source="stanza_ud")
+                    tokens.append(item)
+            if not tokens:
+                continue
+            span = flat[tokens[0]["char_start"]:tokens[-1]["char_end"]]
+            sentence = {"sentence_index": index, "text": span, "tokens": tokens,
+                        "mentions": [], "grammar_source": "stanza_ud"}
+            validate_sentence(sentence)
+            out.append(sentence)
+        return out
+
     def parse_pretokenized(self, sentences: Sequence[Sequence[str]]):
         """Per sentence, per gold token: the list of Stanza words (MWT-safe)."""
         if not sentences:

@@ -146,27 +146,42 @@ def gold_document(rows, ratings, gold, parser, args, annotator=None, nlp=None):
     every distance carry the same kind of tokens, syntax and entities."""
     job_id, context_text, targets, pools = check_rows(rows, ratings, args)
     clasp_id = int(rows[0]["clasp_id"])
-    contexts, gold_targets = gold
-    if bool(context_text) != bool(contexts.get(clasp_id)):
+    # Without a gold annotation directory the context is tokenised and split by
+    # Stanza straight from the Pre-Context text, exactly as an alternative is.
+    # Nothing is lost: CorPipe supplies every entity here, so the manual entity
+    # layer would be overwritten anyway, and the gold target sentence is
+    # discarded below in favour of annotate_target.
+    from_text = gold is None
+    contexts, gold_targets = ({}, {}) if from_text else gold
+    if not from_text and bool(context_text) != bool(contexts.get(clasp_id)):
         raise ValueError(f"{job_id}: context text and gold context annotation disagree about being empty")
-    context, context_aligned = ([], True) if not context_text else \
-        gold_context(clasp_id, context_text, contexts[clasp_id], parser)
+    if not context_text:
+        context, context_aligned = [], True
+    elif from_text:
+        context, context_aligned = parser.parse_document(context_text), True
+    else:
+        context, context_aligned = gold_context(clasp_id, context_text, contexts[clasp_id], parser)
     if args.context_annotation == "corpipe" and context:
         context = corpipe_context(context, annotator, job_id)
     items, target_aligned = [], {}
     for target in targets:
         language = target["language"]
-        if not gold_targets.get((clasp_id, language)):
+        if not from_text and not gold_targets.get((clasp_id, language)):
             raise ValueError(f"{job_id}: no gold annotation for the {language} target")
         text = normalise_text(target["text"])
-        sentence, target_aligned[language] = gold_target(
-            clasp_id, language, text, gold_targets[(clasp_id, language)], parser)
+        if from_text:
+            sentence, target_aligned[language] = None, True
+        else:
+            sentence, target_aligned[language] = gold_target(
+                clasp_id, language, text, gold_targets[(clasp_id, language)], parser)
         row = ratings[language]
         if args.target_annotation == "corpipe":
             annotated = annotate_target(text, context, annotator, parser, nlp, args,
                                         f"{job_id}_{language}")
             sentences, source = annotated["sentences"], annotated["annotation_source"]
         else:
+            if sentence is None:
+                raise SystemExit("--target-annotation manual needs --clasp-annotation-dir")
             sentences, source = [sentence], "manual_gum_csv_entities_stanza_ud_on_gold_tokens"
         branch = {"id": f"target_{language}", "language": language,
                   "kind": "observed_target" if language == "English" else "back_translation_target",
@@ -232,7 +247,7 @@ def gold_path(args, clasp_id):
 
 def list_jobs(args):
     """One job per ID and strategy; longest gold context first."""
-    contexts = load_gold(args.clasp_annotation_dir)[0]
+    contexts = load_gold(args.clasp_annotation_dir)[0] if args.clasp_annotation_dir else {}
     jobs = []
     for clasp_id in raw_paths(args):
         cost = sum(len(rows) for rows in contexts.get(clasp_id, {}).values())
@@ -259,7 +274,7 @@ class Worker:
         self.args, self.annotator, self.parser, self.nlp, self.queue = args, annotator, parser, nlp, queue
         self.paths = raw_paths(args)
         self.ratings = load_ratings(args.clasp_gold)
-        self.gold = load_gold(args.clasp_annotation_dir)
+        self.gold = load_gold(args.clasp_annotation_dir) if args.clasp_annotation_dir else None
         self.documents = LastUsed(3)
 
     def load(self, clasp_id):
@@ -352,8 +367,6 @@ def parse_args(argv=None):
     parser = build_parser()
     args = parser.parse_args(_with_fixed(sys.argv[1:] if argv is None else argv))
     check_args(parser, args)
-    if not args.clasp_annotation_dir:
-        parser.error("--clasp-annotation-dir is required")
     return args
 
 
