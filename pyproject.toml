@@ -14,6 +14,21 @@ dependencies = [
     "minicons>=0.3.39",
     "spacy>=3.8.16",
     "transformers==5.2.0",
+    # scripts/entity_iv: Stanza parses the alternatives, torch backs both the
+    # coreference model and the sentence embeddings used for the semantic
+    # distances.
+    "stanza>=1.10",
+    "torch>=2.4",
+    # spaCy ships its models as separate wheels rather than on PyPI; the POS
+    # n-gram distances and the sentence splitter both load en_core_web_sm.
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+]
+
+[project.optional-dependencies]
+# Only the alternative-generation step needs vLLM, and it is a large install,
+# so it is kept out of the default set: uv sync --extra generation
+generation = [
+    "vllm>=0.6",
 ]
 
 [project.scripts]
