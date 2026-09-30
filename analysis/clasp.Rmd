@@ -12,21 +12,47 @@ library(plotrix)
 library(DHARMa)
 library(MASS)
 # library(broom.mixed)
+library(glue)
+library(this.path)
 
 source("k_fold_cross_validation.R")
 ```
 
 ```{r}
-clasp_surp_with_context <- read.csv("../annotated/surprisal/clasp/clasp_with_context_by_worker_and_sent/pythia-1.4b-deduped-step1000-full.tsv", sep = "\t") %>%
+base_path = "../annotated/surprisal/clasp/clasp_with_context_by_worker_and_sent"
+
+clasp_surp_with_context <- bind_rows(
+  # read.csv(path.join(base_path, "pythia-70m-deduped-step1000-full.tsv"), sep = "\t", header = TRUE) %>%
+  #   mutate(model = "pythia-70m", checkpoint = "step1000"),
+  read.csv(path.join(base_path, "pythia-400m-deduped-step1000-full.tsv"), sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-400m", checkpoint = "step1000"),
+  read.csv(path.join(base_path, "pythia-1.4b-deduped-step1000-full.tsv"), sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-1.4b", checkpoint = "step1000"),
+  read.csv(path.join(base_path, "pythia-6.9b-deduped-step1000-full.tsv"), sep = "\t", header = TRUE) %>% 
+    mutate(model = "pythia-6.9b", checkpoint = "step1000"),
+  read.csv(path.join(base_path, "pythia-12b-deduped-step1000-full.tsv"), sep = "\t", header = TRUE) %>% 
+    mutate(model = "pythia-12b", checkpoint = "step1000"),
+  # read.csv(path.join(base_path, "pythia-70m-deduped-full.tsv"), sep = "\t", header = TRUE) %>%
+  #   mutate(model = "pythia-70m", checkpoint = "full model"),
+  read.csv(path.join(base_path, "pythia-400m-deduped-full.tsv"), sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-400m", checkpoint = "full model"),
+  read.csv(path.join(base_path, "pythia-1.4b-deduped-full.tsv"), sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-1.4b", checkpoint = "full model"),
+  read.csv(path.join(base_path, "pythia-6.9b-deduped-full.tsv"), sep = "\t", header = TRUE) %>% 
+    mutate(model = "pythia-6.9b", checkpoint = "full model"),
+  read.csv(path.join(base_path, "pythia-12b-deduped-full.tsv"), sep = "\t", header = TRUE) %>% 
+    mutate(model = "pythia-12b", checkpoint = "full model"),
+  ) %>%
   mutate(
+    model = factor(model, levels = c("pythia-400m", "pythia-1.4b", "pythia-6.9b", "pythia-12b")),
     answer = as.numeric(answer),
     lang_id = as.factor(lang_id),
     prefix_length = str_count(prefix, " ") + 1,
     sent_length = str_count(sent, " ") + 1,
     suffix_length = str_count(suffix, " ") + 1,
     input_length = prefix_length + sent_length,
-    mean_surprisal = sentence_surprisal/sent_length
-  ) %>%
+    mean_surprisal = sentence_surprisal/sent_length,
+  )%>%
   filter(!is.na(answer))
 # clasp_surp_no_context <- read.csv("annotated/surprisal/clasp/clasp_no_context_by_worker_and_sent/pythia-1.4b-deduped-step1000-full.tsv", sep = "\t") %>%
 #   mutate(lang_id = as.factor(lang_id))
@@ -35,38 +61,45 @@ clasp_surp_with_context <- read.csv("../annotated/surprisal/clasp/clasp_with_con
 ```
 
 ```{r}
-ggplot(clasp_surp_with_context, aes(x = lang_id, y = mean_surprisal, fill = as.factor(answer))) + 
+clasp_surp_with_context %>%
+  # filter(model == "pythia-12b") %>%
+ggplot(aes(x = lang_id, y = mean_surprisal, fill = as.factor(answer))) + 
   geom_boxplot() +
   scale_fill_viridis_d(direction = -1) +
   theme_bw() +
+  facet_grid(~model) +
   labs(x = "Language", y = "Mean Sent Surprisal", fill = "Answer")
 ```
+
 ```{r}
-ggplot(clasp_surp_with_context, aes(x = as.factor(answer), y = prefix_length, fill = as.factor(lang_id))) + 
+clasp_surp_with_context %>% filter(lang_id == 4) %>%
+ggplot(aes(x = as.factor(lang_id), y = prefix_length, fill = as.factor(answer))) + 
   geom_boxplot() +
-  theme_bw() +
-  labs(x = "Answer", y = "Prefix Length", , fill = "Language")
+  theme_bw() #+
+  # labs(x = "Answer", y = "Prefix Length", , fill = "Language")
 ```
 
 ```{r}
 clasp_surp_with_context %>%
   subset(select = -c(lang_id)) %>%
-  group_by(sent_id) %>%
+  group_by(sent_id, model, checkpoint) %>%
   summarise(
     across(answer:mean_surprisal, mean, na.rm = TRUE)
   ) %>%
 ggplot(aes(x = input_length, y = mean_surprisal, fill = answer)) +
   geom_point(shape = 21, size = 2.5, color = "black") +
   scale_fill_viridis_c() +
+  facet_grid(~model) +
   theme_bw()
 ```
 
 ```{r}
 clasp_surp_with_context0 <- clasp_surp_with_context %>%
   subset(select = -c(lang_id)) %>%
-  group_by(sent_id, WorkerId) %>%
+  # filter(lang_id %in% c("0","2","3")) %>%
+  group_by(sent_id, WorkerId, model, checkpoint) %>%
   summarise(
-    across(answer:mean_surprisal, mean, na.rm = TRUE),
+    across(answer:mean_surprisal, \(x) mean(x, na.rm = TRUE)),
     .groups = "drop_last"
   ) %>%
   ungroup() %>%
@@ -77,19 +110,12 @@ clasp_surp_with_context0 <- clasp_surp_with_context %>%
     sent_length_s = scale(sent_length),
     mean_surprisal_s = scale(mean_surprisal),
     input_length_s = scale(input_length),
-    # for beta family we need values striclty < 1 and > 0
-    answer_s = scales::rescale(answer, to = c(0.001, 0.999))
+    answer_s = (answer-1)/3
   )
 ```
 
 ```{r}
-ggplot(clasp_surp_with_context0) +
-  geom_histogram(aes(x = answer), bins = 20) +
-  theme_bw()
-```
-
-```{r}
-descdist(clasp_surp_with_context0$answer_s, discrete=FALSE, boot=500)
+descdist(clasp_surp_with_context0$answer, discrete=FALSE, boot=500)
 ```
 
 ```{r}
@@ -98,11 +124,12 @@ sum(is.na(clasp_surp_with_context0$sent_length_s))
 sum(is.na(clasp_surp_with_context0$prefix_length_s))
 ```
 
+
 ```{r}
-clasp_ivs <- read.csv("../iv_temp_125_union/clasp/iv_temp_125.csv") %>%
+clasp_ivs <- read.csv("../iv_values/clasp/iv_temp_125.csv") %>%
   group_by(document_id) %>%
   summarize(
-    across(d1_recurrence_uniform_n_valid:d_semantic_euclidean_min, mean, na.rm = TRUE)
+    across(d1_recurrence_uniform_mean:d_semantic_euclidean_min, mean, na.rm = TRUE)
   ) %>%
   mutate(
     document_id = as.integer(str_sub(document_id, 7, 10))
@@ -110,18 +137,26 @@ clasp_ivs <- read.csv("../iv_temp_125_union/clasp/iv_temp_125.csv") %>%
   rename(
     sent_id = document_id
   )
+clasp_mentions <- read.csv("../gold_counts/clasp_entity_counts.csv") %>%
+  mutate(sent_id = as.integer(gsub(".*_|(::.*)", "", item_id))) %>%
+  group_by(sent_id) %>%
+  summarise(
+    across(n_mentions:cum_role_cost_per_transition, \(x) mean(x, na.rm = TRUE))
+  )
+  
 fit_df <- merge(x = clasp_surp_with_context0, y = clasp_ivs,  by = c("sent_id"), all.x = TRUE) %>%
+  merge(y = clasp_mentions, by = c("sent_id"), all.x = TRUE) %>%
   mutate(
     across(
-      sentence_surprisal:d_semantic_euclidean_min, ~as.numeric(scale(.x)), .names = "{.col}_s"
+      sentence_surprisal:cum_role_cost_per_transition, ~as.numeric(scale(.x)), .names = "{.col}_s"
     )
   )
 # sample an exploratory set of half of the participants
 sampled_WorkerIds <- fit_df %>%
   pull(WorkerId) %>%
-  sample(size = 75)
+  sample(size = 76)
 expl_df <- fit_df %>%
-  filter(WorkerId %in% sampled_WorkerIds)
+  filter(WorkerId %in% sampled_WorkerIds, model == "pythia-12b", checkpoint == "full model")
 
 ```
 
@@ -129,13 +164,13 @@ Model selection
 
 ```{r}
 # intercept-only model (how much is the rating affected by the identity of the participant?)
-m0 <- glmmTMB(answer_s ~ 1 + (1|WorkerId), data = expl_df, family = gaussian())
+m0 <- glmmTMB(answer ~ 1 + (1|WorkerId), data = expl_df, family=gaussian)
 r2(m0)
 ```
 
 ```{r}
 # context model - does the amount of context (number of words) matter for the rating?
-m_context <- glmmTMB(answer_s ~ prefix_length_s + (1|WorkerId), data = expl_df, gaussian())
+m_context <- glmmTMB(answer ~ prefix_length_s + (1|WorkerId), data = expl_df, family=gaussian)
 anova(m_context, m0)
 r2(m_context)
 ```
@@ -143,25 +178,52 @@ No improvement over intercept-only model -> discard
 
 ```{r}
 # missing context model - how important is the amount of text the participant hasn't seen yet?
-m_missing_context <- glmmTMB(answer_s ~ suffix_length_s + (1|WorkerId), data = expl_df, gaussian())
+m_missing_context <- glmmTMB(answer ~ suffix_length_s + (1|WorkerId), data = expl_df, family=gaussian)
 anova(m0, m_missing_context)
-summary(m_missing_context)
+# summary(m_missing_context)
 ```
 
 This effect is vanishingly small -> discard!
 
 ```{r}
 # sentence-length model
-m_sent_length <- glmmTMB(answer_s ~ sent_length_s + (1|WorkerId), data = expl_df, gaussian())
+m_sent_length <- glmmTMB(answer ~ sent_length_s + (1|WorkerId), data = expl_df, family = gaussian)
 anova(m0, m_sent_length)
 ```
 
 No effect of sentence length either!
 
 ```{r}
-m_surprisal <- glmmTMB(answer_s ~ mean_surprisal_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m0, m_surprisal)
+m_surprisal <- glmmTMB(answer ~ mean_surprisal_s + (1|WorkerId), data = expl_df, family = gaussian)
+anova(m_sent_length, m_surprisal)
+summary(m_surprisal)
+r2(m_surprisal)
+# m_sent_length: answer ~ sent_length_s + (1 | WorkerId), zi=~0, disp=~1
+# m_surprisal: answer ~ mean_surprisal_s + (1 | WorkerId), zi=~0, disp=~1
+#               Df    AIC    BIC  logLik deviance  Chisq Chi Df Pr(>Chisq)    
+# m_sent_length  4 7080.8 7105.2 -3536.4   7072.8                             
+# m_surprisal    4 6918.0 6942.4 -3455.0   6910.0 162.78      0  < 2.2e-16 ***
+# ---
+# Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+# # R2 for Mixed Models
+# 
+#   Conditional R2: 0.329
+#      Marginal R2: 0.035
 ```
+```{r}
+m_surprisal_sum <- glmmTMB(answer ~ sentence_surprisal_s + (1|WorkerId), data = expl_df, family = gaussian)
+anova(m_surprisal, m_surprisal_sum)
+r2(m_surprisal_sum)
+# Data: expl_df
+# Models:
+# m_surprisal: answer_s ~ mean_surprisal_s + (1 | WorkerId), zi=~0, disp=~1
+# m_surprisal_sum: answer_s ~ sentence_surprisal_s + sent_length_s + (1 | WorkerId), zi=~0, disp=~1
+#                 Df     AIC     BIC logLik deviance Chisq Chi Df Pr(>Chisq)
+# m_surprisal      4 -507.36 -483.74 257.68  -515.36                        
+# m_surprisal_sum  5 -485.30 -455.78 247.65  -495.30     0      1          1
+```
+
+
 ```{r}
 # check residuals
 plot(simulateResiduals(m_surprisal))
@@ -169,92 +231,237 @@ plot(simulateResiduals(m_surprisal))
 
 
 ```{r}
-m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs0)
-anova(m_ivs0, m_ivs1)
+iv_formula <- answer_s ~ mean_surprisal_s +
+                        input_length_s +
+                        d1_recurrence_uniform_mean_s +
+                        d1_recurrence_exponential_mean_s +
+                        d2_new_head_mean_s +
+                        d3_transition_mean_s +
+                        d_lexical_1gram_mean_s +
+                        d_lexical_2gram_mean_s +
+                        d_lexical_3gram_mean_s +
+                        d_pos_overlap_1gram_mean_s +
+                        d_pos_overlap_2gram_mean_s +
+                        d_pos_overlap_3gram_mean_s +
+                        d_syntactic_dependency_1gram_mean_s +
+                        d_syntactic_dependency_2gram_mean_s +
+                        d_syntactic_dependency_3gram_mean_s +
+                        d_semantic_cosine_mean_s +
+                        d_semantic_euclidean_mean_s +
+                        ctx_n_mentions_s +
+                        (1|WorkerId)
+
+mention_formula <- answer_s ~ mean_surprisal_s + input_length_s +
+                            n_mentions_s +
+                            n_transitions_s +
+                            n_entities_s +
+                            # n_entities_from_context_s +
+                            ctx_n_mentions_s +
+                            ctx_n_entities_s +
+                            ctx_role_cost_per_transition_s +
+                            # cum_n_mentions_s +
+                            # cum_n_entities_s +
+                            cum_role_cost_per_transition_s +
+                            (1|WorkerId)
 ```
 
 ```{r}
-m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs0)
-anova(m_ivs0, m_ivs1)
+m1 <- glmmTMB(iv_formula, data = fit_df %>% filter(model == "pythia-12b", checkpoint == "full model"), family = ordbeta())
+r2(m1)
+plot(simulateResiduals(m1))
+```
+```{r}
+summary(m1)
 ```
 
 ```{r}
-m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs0)
-anova(m_ivs0, m_ivs1)
-```
-```{r}
-m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs0)
-anova(m_ivs0, m_ivs1)
-```
-
-```{r}
-m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId), data = expl_df, gaussian())
-m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs0)
-anova(m_ivs0, m_ivs1)
-```
-```{r}
-m_ivs0 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d3_transition_mean_s + (1|WorkerId), data = expl_df, gaussian())
-m_ivs1 <- glmmTMB(answer_s ~ mean_surprisal_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + (1|WorkerId), data = expl_df, gaussian())
-anova(m_surprisal, m_ivs0)
-anova(m_ivs0, m_ivs1)
-```
-```{r}
-# check residuals
-plot(simulateResiduals(m_ivs1))
-```
-
-
-Defining models
-
-```{r}
-m0_formula <- answer_s ~ mean_surprisal_s + (1|WorkerId)
-m1_formula <- answer_s ~ mean_surprisal_s + 
-                         d_syntactic_1gram_mean_s + 
-                         d_semantic_cosine_mean_s + 
-                         d1_recurrence_exponential_mean_s + 
-                         d2_new_head_mean_s + 
-                         d3_transition_mean_s + 
-                         (1|WorkerId)
-```
-
-
-Cross-validation
-
-```{r}
-set.seed(123)
-results <- model_cross_val(m0_formula, m1_formula, fit_df, model_family=beta_family, group_var = "WorkerId", num_folds = 5)
+m2 <- glmmTMB(mention_formula, data = fit_df %>% filter(model == "pythia-12b", checkpoint == "full model"), family = ordbeta())
+r2(m2)
+plot(simulateResiduals(m2))
 ```
 
 
 ```{r}
-cv_summary <- results$cv_summary
-fixef_summary <- results$fixef_summary
-cat("\nMean delta log-likelihood per item (m1 - m0):", mean(cv_summary$delta_ll, na.rm = TRUE), "\n")
-cat("Mean RMSE m0:", mean(cv_summary$rmse0, na.rm = TRUE), "\n")
-cat("Mean RMSE m1:", mean(cv_summary$rmse1, na.rm = TRUE), "\n")
-cat("Mean delta RMSE (m1 - m0):", mean(cv_summary$delta_rmse, na.rm = TRUE), "\n")
-cat("Mean delta marginal R2:", mean(cv_summary$delta_r2m, na.rm = TRUE), "\n")
-cat("Mean delta conditional R2:", mean(cv_summary$delta_r2c, na.rm = TRUE), "\n")
+library(ordbetareg)
+calc_test_loglik_ordbeta <- function(model, test_df, response_col) {
+  y_pred <- test_df[[response_col]]
+
+  # mu on response scale, eta on link (logit) scale — need both
+  mu_pred  <- predict(model, newdata = test_df, type = "response", allow.new.levels = TRUE)
+  valid_idx <- complete.cases(mu_pred)
+  # eta_pred <- predict(model, newdata = test_df, type = "link",     allow.new.levels = TRUE)
+
+  phi_val <-sigma(model)
+
+  # Ordbeta cutpoints (on the logit/latent scale) — shared across all observations
+  # cutpoints <- model$obj$env$parList()$psi
+  # a1 <- cutpoints[1]
+  # a2 <- cutpoints[2]
+  # 
+  # is_zero <- y == 0
+  # is_one  <- y == 1
+  # is_mid  <- !is_zero & !is_one
+  
+  theta_vals <- model$fit$par[grep("psi", names(model$fit$par))]
+
+  # loglik <- numeric(length(y))
+  # 
+  # loglik[is_zero] <- plogis(a1 - eta_hat[is_zero], log.p = TRUE)
+  # loglik[is_one]  <- log(1 - plogis(a2 - eta_hat[is_one]))
+  # 
+  # p_mid <- plogis(a2 - eta_hat[is_mid]) - plogis(a1 - eta_hat[is_mid])
+  # shape1 <- mu_hat[is_mid] * phi_hat
+  # shape2 <- (1 - mu_hat[is_mid]) * phi_hat
+  # loglik[is_mid] <- log(p_mid) + dbeta(y[is_mid], shape1, shape2, log = TRUE)
+  log_lik_components <- dordbeta(
+      y_pred[valid_idx], 
+      mu = mu_pred, 
+      phi = phi_val, 
+      cutpoints = theta_vals, 
+      log = TRUE
+    )
+  sum(log_lik_components)
+}
 ```
+
+
 ```{r}
-fixef_summary %>%
+model_cross_val <- function(model_formula, df, group_var,
+                            model_family, num_folds=10){
+  
+  # sample folds grouped by WorkerId
+  groups <- unique(df[[group_var]])
+  fold_map <- setNames(sample(rep(1:num_folds, length.out = length(groups))), groups)
+  df$.fold <- fold_map[as.character(df[[group_var]])]
+  
+  cv_results <- vector("list", num_folds)
+  fixef_results <- vector("list", num_folds)
+  
+  response_var <- all.vars(model_formula)[1]
+  
+  # create a dummy null model for r2 calculation
+  null_formula <- make_null_formula(model_formula)
+  
+  for (i in 1:num_folds) {
+    train_data <- df %>% filter(.fold != i)
+    test_data  <- df %>% filter(.fold == i)
+    
+    null_fit <- glmmTMB(null_formula, data = train_data, family = model_family)
+    model_fit <- glmmTMB(model_formula, data = train_data, family = model_family)
+    model_log_lik <- calc_test_loglik_ordbeta(model_fit, test_data, response_var)
+    model_rmse <- calc_test_rmse(model_fit, test_data, response_var)
+    model_r2 <- r2(model_fit, null_model = null_fit)
+
+    cv_results[[i]] <- data.frame(
+      fold = i, log_lik = model_log_lik, rmse = model_rmse, 
+      r2_marginal = as.numeric(model_r2$R2_marginal), 
+      r2_conditional = as.numeric(model_r2$R2_conditional)
+    )
+    fixef_results[[i]] <- tidy(model_fit, effects = "fixed", conf.int = TRUE) %>%
+      transmute(fold = i, term, estimate, std.error, statistic, p.value, 
+                conf.low, conf.high)
+  }
+  
+  cv_summary <- do.call(rbind, cv_results)
+  fixef_summary <- do.call(rbind, fixef_results)
+  
+  return(
+    list(cv_summary = cv_summary, fixef_summary = fixef_summary)
+  )
+}
+```
+
+
+```{r}
+i <- 1
+clasp_fixef_results <- vector("list")
+clasp_cv_results <- vector("list")
+
+for (m in unique(fit_df$model)) {
+  for (c in unique(fit_df$checkpoint)) {
+    results <- model_cross_val(
+      mention_formula,
+      fit_df %>% filter(model == m, checkpoint == c),
+      "WorkerId",
+      ordbeta(),
+      num_folds = 5
+    )
+    clasp_fixef_results[[i]] <- results$fixef_summary %>% mutate(model = m, checkpoint = c)
+    clasp_cv_results[[i]] <- results$cv_summary %>% mutate(model = m, checkpoint = c)
+    i <- i + 1
+    print(glue("Finished {m}-{c}"))
+  }
+}
+```
+
+```{r}
+clasp_fixef_results0 <- bind_rows(clasp_fixef_results) %>%
   dplyr::select(!c("fold")) %>%
-  group_by(term) %>%
+  # group_by(term, model, checkpoint) %>%
   summarise(
-    across(everything(), mean, na.rm = TRUE)
+    across(everything(),
+           list(mean = ~mean(.x, na.rm = TRUE),
+                sd = ~sd(.x, na.rm = TRUE),
+                serr = ~sd(.x, na.rm = TRUE) / sqrt(sum(!is.na(.x)))),
+            .names = "{.col}_{.fn}"),
+    .by = c(term, model, checkpoint)
   ) %>%
-  write.csv("results/clasp_fixefs.csv")
+  mutate(
+    significance_levels = cut(
+      p.value_mean,
+      breaks = c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+      labels = c("***", "**", "*", ".", "ns")
+    )
+  )
 
-write.csv(cv_summary, "results/clasp_cv_summary.csv")
+clasp_cv_results0 <- bind_rows(clasp_cv_results) %>%
+  dplyr::select(!c("fold")) %>%
+  # group_by(model, checkpoint) %>%
+  summarise(
+    across(everything(),
+           list(mean = ~mean(.x, na.rm = TRUE),
+                sd = ~sd(.x, na.rm = TRUE),
+                serr = ~sd(.x, na.rm = TRUE) / sqrt(sum(!is.na(.x)))),
+            .names = "{.col}_{.fn}"),
+    .by = c(model, checkpoint)
+  )
+```
+
+```{r}
+write.csv(clasp_fixef_results0, "results/clasp_fixefs_mentions.csv")
+write.csv(clasp_cv_results0, "results/clasp_cv_mentions.csv")
+```
+
+```{r}
+clasp_cv_results0 %>%
+  ggplot(aes(model, r2_marginal_mean)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = r2_marginal_mean - r2_marginal_serr, ymax = r2_marginal_mean + r2_marginal_serr), width = 0.2, color = "grey70") +
+  facet_grid(~checkpoint) +
+  theme_bw()
+```
+
+
+```{r}
+clasp_fixef_results0 %>%
+  filter(term != "(Intercept)", model == "pythia-12b", checkpoint == "full model") %>%
+  ggplot(aes(term, estimate_mean, fill = checkpoint)) +
+  geom_col(position = position_dodge(width = 0.8),
+    width = 0.7,) +
+  geom_errorbar(aes(ymin = estimate_mean - std.error_mean, ymax = estimate_mean + std.error_mean),
+                position = position_dodge(width = 0.8),
+                width = 0.2, color = "grey70") +
+  geom_text(aes(y = 1., label=significance_levels)) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
+                                "#0072B2", "#D55E00", "#CC79A7", "#999999")) +
+  labs(
+    y = "Estimate",
+    x = "IV value",
+    fill = "Checkpoint"
+  ) +
+  theme_bw() +
+  # facet_grid(~c)
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust = 1))
 ```
 
 

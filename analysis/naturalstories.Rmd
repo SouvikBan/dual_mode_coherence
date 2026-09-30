@@ -2,6 +2,7 @@
 library(dplyr)
 library(tidyverse)
 library(performance)
+library(lmerTest)
 library(lme4)
 library(partR2)
 library(fitdistrplus)
@@ -11,6 +12,7 @@ library(glmmTMB)
 library(plotrix)
 library(DHARMa)
 library(MASS)
+library(glue)
 
 source("k_fold_cross_validation.R")
 ```
@@ -110,19 +112,29 @@ ggplot(natstories_rts_by_zone_clean, aes(y = RT_mean, x = zone)) +
 
 ```{r}
 natstories_model_surp <- bind_rows(
-  read.csv("../annotated/surprisal/naturalstories/pythia-70m-deduped-step1000-full.tsv", sep = "\t", header = TRUE) %>%
-    mutate(model = "pythia-70m"),
+  read.csv("../annotated/surprisal/naturalstories/pythia-400m-deduped-step1000-full.tsv", sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-400m", checkpoint = "step1000"),
+  read.csv("../annotated/surprisal/naturalstories/pythia-400m-deduped-full.tsv", sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-400m", checkpoint = "full model"),
   read.csv("../annotated/surprisal/naturalstories/pythia-1.4b-deduped-step1000-full.tsv", sep = "\t", header = TRUE) %>%
-    mutate(model = "pythia-1.4b"),
+    mutate(model = "pythia-1.4b", checkpoint = "step1000"),
+  read.csv("../annotated/surprisal/naturalstories/pythia-1.4b-deduped-full.tsv", sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-1.4b", checkpoint = "full model"),
+  read.csv("../annotated/surprisal/naturalstories/pythia-6.9b-deduped-step1000-full.tsv", sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-6.9b", checkpoint = "step1000"),
+  read.csv("../annotated/surprisal/naturalstories/pythia-6.9b-deduped-full.tsv", sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-6.9b", checkpoint = "full model"),
   read.csv("../annotated/surprisal/naturalstories/pythia-12b-deduped-step1000-full.tsv", sep = "\t", header = TRUE) %>%
-    mutate(model = "pythia-12b"),
-  read.csv("../annotated/surprisal/naturalstories/mgpt-full.tsv", sep = "\t", header = TRUE) %>%
-    mutate(model = "mgpt-1.3B"),
-  read.csv("../annotated/surprisal/naturalstories/mgpt-13B-full.tsv", sep = "\t", header = TRUE) %>%
-    mutate(model = "mgpt-13B")
+    mutate(model = "pythia-12b", checkpoint = "step1000"),
+  read.csv("../annotated/surprisal/naturalstories/pythia-12b-deduped-full.tsv", sep = "\t", header = TRUE) %>%
+    mutate(model = "pythia-12b", checkpoint = "full model"),
+  # read.csv("../annotated/surprisal/naturalstories/mgpt-full.tsv", sep = "\t", header = TRUE) %>%
+  #   mutate(model = "mgpt-1.3B"),
+  # read.csv("../annotated/surprisal/naturalstories/mgpt-13B-full.tsv", sep = "\t", header = TRUE) %>%
+  #   mutate(model = "mgpt-13B")
 ) %>%
   subset(select = -c(word)) %>%
-  mutate(model = factor(model, levels = c("pythia-70m", "pythia-1.4b", "pythia-12b", "mgpt-1.3B", "mgpt-13B")))
+  mutate(model = factor(model, levels = c("pythia-400m", "pythia-1.4b", "pythia-6.9b", "pythia-12b")))
 ```
 
 ```{r}
@@ -163,13 +175,13 @@ natstories_plot_linear %>%
 ```
 
 ```{r}
-natstories_fit_df <- merge(x=natstories_rts_clean, y=natstories_model_surp %>% filter(model == "pythia-70m"), by = c("item", "zone"), all.x = TRUE) %>%
-    group_by(item, sentence_id) %>%
+natstories_fit_df <- merge(x=natstories_rts_clean, y=natstories_model_surp, by = c("item", "zone"), all.x = TRUE) %>%
+    group_by(item, sentence_id, model, checkpoint) %>%
     mutate(
       sentence_length = length(zone)
     ) %>%
-  subset(select = -c(word, model, zone, WorkTimeInSeconds, correct)) %>%
-  group_by(item, sentence_id, WorkerId) %>%
+  subset(select = -c(word, zone, WorkTimeInSeconds, correct)) %>%
+  group_by(item, sentence_id, model, checkpoint, WorkerId) %>%
   summarise(
     # across(where(is.numeric), mean, na.rm  = TRUE), 
     sum_RT = sum(RT),
@@ -185,8 +197,8 @@ natstories_fit_df <- merge(x=natstories_rts_clean, y=natstories_model_surp %>% f
 
 ```{r}
 # load and fix Souvik's naming conventions
-natstories_ivs <- read.csv("../iv_temp_125_union/naturalstories/iv_temp_125.csv", sep = ",", header = TRUE) %>% 
-  dplyr::select(!c(item_id, language, strategy, dataset, n_alternatives, n_complete_alternatives, n_incomplete_fallback_alternatives)) %>%
+natstories_ivs <- read.csv("../iv_values/naturalstories/iv_temp_125.csv", sep = ",", header = TRUE) %>% 
+  dplyr::select(!c(item_id, language, strategy, dataset)) %>%
   dplyr::select(-contains("n_valid")) %>%
   mutate(item = as.integer(str_split_i(document_id, "_", 2))) %>%
   dplyr::select(!document_id) %>%
@@ -213,7 +225,7 @@ descdist(log(natstories_fit_df$sum_RT), discrete=FALSE, boot=500)
 
 ```{r}
 expl_df <- natstories_fit_df %>%
-    filter(item %in% c(1,3,5,7,9))
+    filter(item %in% c(1,3,5,7,9), model == "pythia-12b")
 ```
 
 ```{r}
@@ -309,72 +321,187 @@ natstories_fit_df %>%
 ```
 No heteroscedasticity!
 
-
 ```{r}
-m_ivs0 <- lmer(sum_RT ~ sum_surprisal_s + sentence_length_char_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + (1|WorkerId) + (1|item), data = expl_df)
-m_ivs1 <- lmer(sum_RT ~ sum_surprisal_s + sentence_length_char_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d2_new_head_mean_s + (1|WorkerId) + (1|item), data = expl_df)
-anova(m_ivs0, m_ivs1)
-```
--> drop recurrence
-
-```{r}
-m_ivs0 <- lmer(sum_RT ~ sum_surprisal_s + sentence_length_char_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d2_new_head_mean_s + (1|WorkerId) + (1|item), data = expl_df)
-m_ivs1 <- lmer(sum_RT ~ sum_surprisal_s + sentence_length_char_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d2_new_head_mean_s + (1|WorkerId) + (1|item), data = expl_df)
-anova(m_ivs0, m_ivs1)
-```
---> keep cosine similarity of sent embeddings!
-
-```{r}
-m_ivs0 <- lmer(sum_RT ~ sum_surprisal_s + sentence_length_char_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d2_new_head_mean_s + (1|WorkerId) + (1|item), data = expl_df)
-m_ivs1 <- lmer(sum_RT ~ sum_surprisal_s + sentence_length_char_s + d_lexical_1gram_mean_s + d2_new_head_mean_s + d_semantic_cosine_mean_s + (1|WorkerId) + (1|item), data = expl_df)
-anova(m_ivs0, m_ivs1)
-```
-
-```{r}
-m_ivs0 <- lmer(sum_RT ~ sum_surprisal_s + sentence_length_char_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d2_new_head_mean_s + (1|WorkerId) + (1|item), data = expl_df)
-m_ivs1 <- lmer(sum_RT ~ sum_surprisal_s + sentence_length_char_s + d_lexical_1gram_mean_s + d_syntactic_1gram_mean_s + d_semantic_cosine_mean_s + d2_new_head_mean_s + d3_transition_mean_s +(1|WorkerId) + (1|item), data = expl_df)
-anova(m_ivs0, m_ivs1)
-summary(m_ivs1)
-r2(m_ivs1)
-```
-
-```{r}
-base_formula <- sum_RT ~ sum_surprisal_s + sentence_length_char_s + (1|WorkerId) + (1|item)
-```
-
-```{r}
-model_formula_iv1 <- sum_RT ~ sum_surprisal_s + sentence_length_char_s + 
-                              d_lexical_1gram_mean_s + 
-                              d_syntactic_1gram_mean_s + 
-                              d1_recurrence_exponential_mean_s + 
-                              d_semantic_cosine_mean_s + 
-                              d2_new_head_mean_s + 
-                              d3_transition_mean_s + 
+iv_formula <- sum_RT ~ sum_surprisal_s + sentence_length_char_s + 
+                              d1_recurrence_uniform_mean_s +
+                              d1_recurrence_exponential_mean_s +
+                              d2_new_head_mean_s +
+                              d3_transition_mean_s +
+                              d_lexical_1gram_mean_s +
+                              d_lexical_2gram_mean_s +
+                              d_lexical_3gram_mean_s +
+                              d_pos_overlap_1gram_mean_s +
+                              d_pos_overlap_2gram_mean_s +
+                              d_pos_overlap_3gram_mean_s +
+                              d_syntactic_dependency_1gram_mean_s +
+                              d_syntactic_dependency_2gram_mean_s +
+                              d_syntactic_dependency_3gram_mean_s +
+                              d_semantic_cosine_mean_s +
+                              d_semantic_euclidean_mean_s +
                               (1|WorkerId) + (1|item)
 ```
 
+```{r}
+calc_test_loglik_gaussian <- function(model, test_data, response_var,
+                                  allow_new_levels = TRUE) {
+  
+  mu_pred <- predict(model, newdata = test_data,
+                     allow.new.levels = allow_new_levels)
+  
+  # sd of residuals
+  resid_sd <- sigma(model)
+  
+  observed <- test_data[[response_var]]
+  n <- nrow(test_data)
+  
+  # residual sum of squares
+  residual_ss <- sum((test_data$Reaction - mu_pred)^2)
+  
+  log_lik <- (n / 2) * log(2 * pi) - (n / 2) * log((resid_sd)^2) - (residual_ss / (2 * (resid_sd)^2))
+  
+  return(
+    # sum(dnorm(observed, mean = mu_pred, sd = resid_sd, log = TRUE))
+    log_lik
+    )
+}
+```
+
 
 ```{r}
-results_iv1 <- model_cross_val_lmer(base_formula, model_formula_iv1, natstories_fit_df, group_var = "WorkerId", num_folds = 10)
-cv_summary <- results_iv1$cv_summary
-fixef_summary <- results_iv1$fixef_summary
-cat("Mean delta log-likelihood per item (m1 - m0):", mean(cv_summary$delta_ll, na.rm = TRUE), "\n")
-cat("Mean RMSE m0:", mean(cv_summary$rmse0, na.rm = TRUE), "\n")
-cat("Mean RMSE m1:", mean(cv_summary$rmse1, na.rm = TRUE), "\n")
-cat("Mean delta RMSE (m1 - m0):", mean(cv_summary$delta_rmse, na.rm = TRUE), "\n")
-cat("Mean delta marginal R2:", mean(cv_summary$delta_r2m, na.rm = TRUE), "\n")
-cat("Mean delta conditional R2:", mean(cv_summary$delta_r2c, na.rm = TRUE), "\n")
+model_cross_val <- function(model_formula, df, group_var, num_folds=10){
+  
+  # sample folds grouped by WorkerId
+  groups <- unique(df[[group_var]])
+  fold_map <- setNames(sample(rep(1:num_folds, length.out = length(groups))), groups)
+  df$.fold <- fold_map[as.character(df[[group_var]])]
+  
+  cv_results <- vector("list", num_folds)
+  fixef_results <- vector("list", num_folds)
+  
+  response_var <- all.vars(model_formula)[1]
+  
+  # create a dummy null model for r2 calculation
+  null_formula <- make_null_formula(model_formula)
+  
+  for (i in 1:num_folds) {
+    train_data <- df %>% filter(.fold != i)
+    test_data  <- df %>% filter(.fold == i)
+    
+    null_fit <- lmer(null_formula, data = train_data)
+    model_fit <- lmer(model_formula, data = train_data)
+    model_log_lik <- calc_test_loglik_gaussian(model_fit, test_data, response_var)
+    model_rmse <- calc_test_rmse(model_fit, test_data, response_var)
+    model_r2 <- r2(model_fit, null_model = null_fit)
+
+    cv_results[[i]] <- data.frame(
+      fold = i, log_lik = model_log_lik, rmse = model_rmse, 
+      r2_marginal = as.numeric(model_r2$R2_marginal),
+      r2_conditional = as.numeric(model_r2$R2_conditional)
+    )
+    
+    fixef_results[[i]] <- tidy(model_fit, effects = "fixed", conf.int = TRUE) %>%
+      transmute(fold = i, term, estimate, std.error, statistic, p.value, 
+                conf.low, conf.high)
+  }
+  
+  cv_summary <- do.call(rbind, cv_results)
+  fixef_summary <- do.call(rbind, fixef_results)
+  
+  return(
+    list(cv_summary = cv_summary, fixef_summary = fixef_summary)
+  )
+}
+```
+
+```{r}
+i <- 1
+natstories_fixef_results <- vector("list")
+natstories_cv_results <- vector("list")
+
+for (m in unique(natstories_fit_df$model)) {
+  for (c in unique(natstories_fit_df$checkpoint)) {
+    # print(glue("{m}, {c}"))
+    results <- model_cross_val(
+      iv_formula,
+      natstories_fit_df %>% filter(model == m, checkpoint == c),
+      "WorkerId",
+      num_folds = 5
+    )    
+    natstories_fixef_results[[i]] <- results$fixef_summary %>% mutate(model = m, checkpoint = c)
+    natstories_cv_results[[i]] <- results$cv_summary %>% mutate(model = m, checkpoint = c)
+    
+    print(glue("Finished {m}-{c}"))
+    
+    i <- i + 1
+    
+  }
+}
 ```
 ```{r}
-fixef_summary %>%
+natstories_fixef_results0 <- bind_rows(natstories_fixef_results) %>%
   dplyr::select(!c("fold")) %>%
-  group_by(term) %>%
+  # group_by(term, model, checkpoint) %>%
   summarise(
-    across(everything(), mean, na.rm = TRUE)
+    across(everything(),
+           list(mean = ~mean(.x, na.rm = TRUE),
+                sd = ~sd(.x, na.rm = TRUE),
+                serr = ~sd(.x, na.rm = TRUE) / sqrt(sum(!is.na(.x)))),
+            .names = "{.col}_{.fn}"),
+    .by = c(term, model, checkpoint)
   ) %>%
-  write.csv("results/naturalstories_fixefs.csv")
+  mutate(
+    significance_levels = cut(
+      p.value_mean,
+      breaks = c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+      labels = c("***", "**", "*", ".", "ns")
+    )
+  )
 
-write.csv(cv_summary, "results/naturalstories_cv_summary.csv")
+natstories_cv_results0 <- bind_rows(natstories_cv_results) %>%
+  dplyr::select(!c("fold")) %>%
+  # group_by(model, checkpoint) %>%
+  summarise(
+    across(everything(),
+           list(mean = ~mean(.x, na.rm = TRUE),
+                sd = ~sd(.x, na.rm = TRUE),
+                serr = ~sd(.x, na.rm = TRUE) / sqrt(sum(!is.na(.x)))),
+            .names = "{.col}_{.fn}"),
+    .by = c(model, checkpoint)
+  )
 ```
 
+```{r}
+write.csv(natstories_fixef_results0, "results/natstories_fixefs.csv")
+write.csv(natstories_cv_results0, "results/natstories_cv.csv")
+```
+
+```{r}
+natstories_cv_results0 %>%
+  ggplot(aes(model, r2_marginal_mean)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = r2_marginal_mean - r2_marginal_serr, ymax = r2_marginal_mean + r2_marginal_serr), width = 0.2, color = "grey70") +
+  facet_grid(~checkpoint) +
+  theme_bw()
+```
+
+```{r}
+natstories_fixef_results0 %>%
+  filter(term != "(Intercept)", model == "pythia-12b") %>%
+  ggplot(aes(term, estimate_mean, fill = checkpoint)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_errorbar(aes(ymin = estimate_mean - std.error_mean, ymax = estimate_mean + std.error_mean),
+                position = position_dodge(width = 0.8),
+                width = 0.2, color = "grey70") +
+  geom_text(aes(y = 1., label=significance_levels)) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
+                                "#0072B2", "#D55E00", "#CC79A7", "#999999")) +
+  labs(
+    y = "Estimate",
+    x = "IV value",
+    fill = "Checkpoint"
+  ) +
+  theme_bw() +
+  # facet_grid(~c)
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust = 1))
+```
 

@@ -1,0 +1,92 @@
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyverse)
+library(glue)
+```
+
+```{r}
+fixefs_df <- bind_rows(
+  read.csv("results/clasp_fixefs_mentions.csv") %>% 
+    mutate(dataset = "clasp", 
+           term = ifelse(term == "mean_surprisal_s", "surprisal", term)),
+  read.csv("results/natstories_fixefs_mentions.csv") %>% 
+    mutate(dataset = "natstories", 
+           term = ifelse(term == "sum_surprisal_s", "surprisal", term),
+           term = ifelse(term == "sentence_length_char_s", "input_length_s", term))
+)
+
+cv_results_df <- bind_rows(
+  read.csv("results/clasp_cv.csv") %>% mutate(dataset = "clasp"),
+  read.csv("results/natstories_cv.csv") %>% mutate(dataset = "natstories"),
+)
+```
+
+```{r}
+cv_results_df %>%
+  ggplot(aes(fct_relevel(model, "pythia-400m", "pythia-1.4b", "pythia-6.9b", "pythia-12b"), r2_marginal_mean)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_errorbar(aes(ymin = r2_marginal_mean - r2_marginal_serr, ymax = r2_marginal_mean + r2_marginal_serr), width = 0.2, color = "grey70", position = position_dodge(width = 0.8)) +
+  facet_grid(dataset~checkpoint,scales = "free_y") +
+  theme_bw()
+
+  ggsave("img/r2s.pdf", dpi = 600)
+
+```
+
+```{r}
+cv_results_df %>%
+  ggplot(aes(fct_relevel(model, "pythia-400m", "pythia-1.4b", "pythia-6.9b", "pythia-12b"), log_lik_mean)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_errorbar(aes(ymin = log_lik_mean - log_lik_serr, ymax = log_lik_mean + log_lik_serr), width = 0.2, color = "grey70", position = position_dodge(width = 0.8)) +
+   scale_y_reverse() +
+  facet_grid(dataset~checkpoint,scales = "free_y") +
+  theme_bw()
+
+  ggsave("img/log_liks_mentions.pdf", dpi = 600)
+
+```
+```{r}
+unique(fixefs_df$term)
+```
+
+
+```{r}
+fixefs_df %>%
+  filter(term != "(Intercept)", (model == "pythia-12b" & dataset == "clasp" & checkpoint == "full model") | (model == "pythia-400m" & dataset == "natstories" & checkpoint == "step1000")) %>%
+  mutate(sig_pos = ifelse(dataset == "natstories", 3600.0, 1.1)) %>%
+  ggplot(aes(term, estimate_mean)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  geom_errorbar(aes(ymin = estimate_mean - std.error_mean, ymax = estimate_mean + std.error_mean),
+                position = position_dodge(width = 0.8),
+                width = 0.2, color = "grey70") +
+  geom_text(aes(y = sig_pos, label=significance_levels), position = position_dodge(width = 0.8)) +
+  # scale_fill_manual(values = c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
+  #                               "#0072B2", "#D55E00", "#CC79A7", "#999999")) +
+  scale_x_discrete(labels = c("surprisal" = "Surprisal",
+                              "input_length_s" = "Input length (chars)",                   
+                              "d1_recurrence_uniform_mean_s" = "Recurrence (uniform)",       
+                              "d1_recurrence_exponential_mean_s" = "Recurrence (exponential)",
+                              "d2_new_head_mean_s" = "New head",
+                              "d3_transition_mean_s" = "Transition",    
+                              "d_lexical_1gram_mean_s" = "Lexical overlap (1-gram)",
+                              "d_lexical_2gram_mean_s" = "Lexical overlap (2-gram)",            
+                              "d_lexical_3gram_mean_s" = "Lexical overlap (3-gram)",
+                              "d_pos_overlap_1gram_mean_s" = "POS overlap (1-gram)",
+                              "d_pos_overlap_2gram_mean_s" = "POS overlap (2-gram)",        
+                              "d_pos_overlap_3gram_mean_s" = "POS overlap (3-gram)",
+                              "d_syntactic_dependency_1gram_mean_s" = "Deprel overlap (1-gram)",
+                              "d_syntactic_dependency_2gram_mean_s" = "Deprel overlap (2-gram)",
+                              "d_syntactic_dependency_3gram_mean_s" = "Deprel overlap (3-gram)",
+                              "d_semantic_cosine_mean_s" = "Cosine similarity",
+                              "d_semantic_euclidean_mean_s" = "Eculidean distance")) +
+  labs(
+    y = "Estimate",
+    x = "Predictor",
+    fill = "Checkpoint"
+  ) +
+  theme_bw() +
+  facet_grid(dataset~., scales = "free_y") +
+  theme(axis.text.x = element_text(angle = 60, vjust = 1, hjust = 1))
+
+  ggsave("img/estimates_mentions.pdf", dpi = 600)
+```
