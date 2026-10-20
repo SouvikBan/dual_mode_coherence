@@ -1,0 +1,4 @@
+comparison,dll_x100_t125,dll_x100_mean,min_x100_t125,max_x100_t125,strategies_positive
+bayesian - expectancy,0.045,0.018,-0.17,0.26,7
+bayesian - mirror,0.02,0.054,-0.33,0.44,11
+bayesian - uniform,0.045,0.013,-0.73,0.75,8

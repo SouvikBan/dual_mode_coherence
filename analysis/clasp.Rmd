@@ -94,10 +94,13 @@ ggplot(aes(x = input_length, y = mean_surprisal, fill = answer)) +
 ```
 
 ```{r}
+# FIX: individual participant ratings per language variant. lang_id is kept (mapped to the IV file's
+# language names) so a worker's ratings of different variants of the same context are NOT averaged.
+lang_map <- c("0" = "English", "1" = "Czech", "2" = "German", "3" = "Spanish", "4" = "French")
 clasp_surp_with_context0 <- clasp_surp_with_context %>%
+  mutate(language = unname(lang_map[as.character(lang_id)])) %>%
   subset(select = -c(lang_id)) %>%
-  # filter(lang_id %in% c("0","2","3")) %>%
-  group_by(sent_id, WorkerId, model, checkpoint) %>%
+  group_by(sent_id, language, WorkerId, model, checkpoint) %>%
   summarise(
     across(answer:mean_surprisal, \(x) mean(x, na.rm = TRUE)),
     .groups = "drop_last"
@@ -126,26 +129,23 @@ sum(is.na(clasp_surp_with_context0$prefix_length_s))
 
 
 ```{r}
+# FIX: one IV row per (context, language variant); no averaging over the five variants. Cosine only (no Euclidean).
 clasp_ivs <- read.csv("../iv_values/clasp/iv_temp_125.csv") %>%
-  group_by(document_id) %>%
-  summarize(
-    across(d1_recurrence_uniform_mean:d_semantic_euclidean_min, mean, na.rm = TRUE)
-  ) %>%
-  mutate(
-    document_id = as.integer(str_sub(document_id, 7, 10))
-  ) %>%
-  rename(
-    sent_id = document_id
-  )
+  mutate(sent_id = as.integer(str_split_i(document_id, "_", 2)),
+         position = sentence_index) %>%   # position of the target sentence in its document
+  # d8_graph_min is the last IV column (form / MLP transition and graph channels); Euclidean is dropped
+  dplyr::select(sent_id, language, position, d1_recurrence_uniform_mean:d8_graph_min, -starts_with("d_semantic_euclidean"))
+# FIX: gold counts per variant as well; item_id is "clasp_<context>::<Language>"
 clasp_mentions <- read.csv("../gold_counts/clasp_entity_counts.csv") %>%
-  mutate(sent_id = as.integer(gsub(".*_|(::.*)", "", item_id))) %>%
-  group_by(sent_id) %>%
-  summarise(
-    across(n_mentions:cum_role_cost_per_transition, \(x) mean(x, na.rm = TRUE))
-  )
+  mutate(sent_id = as.integer(str_split_i(str_split_i(item_id, "::", 1), "_", 2)),
+         language = str_split_i(item_id, "::", 2)) %>%
+  dplyr::select(sent_id, language, n_mentions:cum_role_cost_per_transition)
   
-fit_df <- merge(x = clasp_surp_with_context0, y = clasp_ivs,  by = c("sent_id"), all.x = TRUE) %>%
-  merge(y = clasp_mentions, by = c("sent_id"), all.x = TRUE) %>%
+fit_df <- merge(x = clasp_surp_with_context0, y = clasp_ivs,  by = c("sent_id", "language"), all.x = TRUE) %>%
+  merge(y = clasp_mentions, by = c("sent_id", "language"), all.x = TRUE)
+# FIX: no rating may be left without IV values
+stopifnot(sum(is.na(fit_df$d3_transition_mean)) == 0)
+fit_df <- fit_df %>%
   mutate(
     across(
       sentence_surprisal:cum_role_cost_per_transition, ~as.numeric(scale(.x)), .names = "{.col}_s"
@@ -233,6 +233,7 @@ plot(simulateResiduals(m_surprisal))
 ```{r}
 iv_formula <- answer_s ~ mean_surprisal_s +
                         input_length_s +
+                        position_s +
                         d1_recurrence_uniform_mean_s +
                         d1_recurrence_exponential_mean_s +
                         d2_new_head_mean_s +
@@ -247,11 +248,12 @@ iv_formula <- answer_s ~ mean_surprisal_s +
                         d_syntactic_dependency_2gram_mean_s +
                         d_syntactic_dependency_3gram_mean_s +
                         d_semantic_cosine_mean_s +
-                        d_semantic_euclidean_mean_s +
-                        ctx_n_mentions_s +
+                        d3_transition_form_mean_s +   # form-bigram transition (GUM)
+                        d8_graph_mean_s +             # entity-graph connection-profile distance
                         (1|WorkerId)
+# ctx_n_mentions_s was in the IV formula before; the gold counts now enter only through mention_formula and both_formula
 
-mention_formula <- answer_s ~ mean_surprisal_s + input_length_s +
+mention_formula <- answer_s ~ mean_surprisal_s + input_length_s + position_s +
                             n_mentions_s +
                             n_transitions_s +
                             n_entities_s +
@@ -263,6 +265,14 @@ mention_formula <- answer_s ~ mean_surprisal_s + input_length_s +
                             # cum_n_entities_s +
                             cum_role_cost_per_transition_s +
                             (1|WorkerId)
+# combined model = controls + the six ENTITY channels + the seven gold counts (the other IV channels are left out:
+# the question is how much of the entity-IV effect is mention counts)
+both_formula <- answer_s ~ mean_surprisal_s + input_length_s + position_s +
+                         d1_recurrence_uniform_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + d3_transition_mean_s +
+                         d3_transition_form_mean_s + d8_graph_mean_s +
+                         n_mentions_s + n_transitions_s + n_entities_s + ctx_n_mentions_s + ctx_n_entities_s +
+                         ctx_role_cost_per_transition_s + cum_role_cost_per_transition_s +
+                         (1|WorkerId)
 ```
 
 ```{r}
@@ -315,7 +325,7 @@ calc_test_loglik_ordbeta <- function(model, test_df, response_col) {
   # loglik[is_mid] <- log(p_mid) + dbeta(y[is_mid], shape1, shape2, log = TRUE)
   log_lik_components <- dordbeta(
       y_pred[valid_idx], 
-      mu = mu_pred, 
+      mu = mu_pred[valid_idx],   # FIX: same rows as y
       phi = phi_val, 
       cutpoints = theta_vals, 
       log = TRUE
@@ -327,8 +337,10 @@ calc_test_loglik_ordbeta <- function(model, test_df, response_col) {
 
 ```{r}
 model_cross_val <- function(model_formula, df, group_var,
-                            model_family, num_folds=10){
+                            model_family, num_folds=10, seed = 123){
   
+  # FIX: reproducible folds
+  set.seed(seed)
   # sample folds grouped by WorkerId
   groups <- unique(df[[group_var]])
   fold_map <- setNames(sample(rep(1:num_folds, length.out = length(groups))), groups)
@@ -364,9 +376,13 @@ model_cross_val <- function(model_formula, df, group_var,
   
   cv_summary <- do.call(rbind, cv_results)
   fixef_summary <- do.call(rbind, fixef_results)
+  # FIX: estimates, SEs and p-values from ONE fit on all the data (not averaged over folds)
+  full_fit <- glmmTMB(model_formula, data = df, family = model_family)
+  fixef_full <- tidy(full_fit, effects = "fixed", conf.int = TRUE) %>%
+    transmute(term, estimate, std.error, statistic, p.value, conf.low, conf.high)
   
   return(
-    list(cv_summary = cv_summary, fixef_summary = fixef_summary)
+    list(cv_summary = cv_summary, fixef_summary = fixef_summary, fixef_full = fixef_full)
   )
 }
 ```
@@ -377,35 +393,32 @@ i <- 1
 clasp_fixef_results <- vector("list")
 clasp_cv_results <- vector("list")
 
-for (m in unique(fit_df$model)) {
-  for (c in unique(fit_df$checkpoint)) {
-    results <- model_cross_val(
-      mention_formula,
-      fit_df %>% filter(model == m, checkpoint == c),
-      "WorkerId",
-      ordbeta(),
-      num_folds = 5
-    )
-    clasp_fixef_results[[i]] <- results$fixef_summary %>% mutate(model = m, checkpoint = c)
-    clasp_cv_results[[i]] <- results$cv_summary %>% mutate(model = m, checkpoint = c)
-    i <- i + 1
-    print(glue("Finished {m}-{c}"))
+# FIX: run BOTH the IV model and the mention-count model (tagged by `formula`), so both panels can be produced
+formulas <- list(iv = iv_formula, mention = mention_formula, both = both_formula)
+for (fname in names(formulas)) {
+  for (m in unique(fit_df$model)) {
+    for (c in unique(fit_df$checkpoint)) {
+      df_mc <- fit_df %>% filter(model == m, checkpoint == c)
+      results <- model_cross_val(formulas[[fname]], df_mc, "WorkerId", ordbeta(), num_folds = 5)
+      # new contexts: folds grouped by context id (10 folds)
+      results_ctx <- model_cross_val(formulas[[fname]], df_mc, "sent_id", ordbeta(), num_folds = 10)
+      clasp_fixef_results[[i]] <- results$fixef_full %>% mutate(model = m, checkpoint = c, formula = fname)
+      clasp_cv_results[[i]] <- bind_rows(
+        results$cv_summary %>% mutate(cv_group = "new participants (5 folds by WorkerId)"),
+        results_ctx$cv_summary %>% mutate(cv_group = "new contexts (10 folds by sent_id)")
+      ) %>% mutate(model = m, checkpoint = c, formula = fname)
+      i <- i + 1
+      print(glue("Finished {fname} {m}-{c}"))
+    }
   }
 }
 ```
 
 ```{r}
 clasp_fixef_results0 <- bind_rows(clasp_fixef_results) %>%
-  dplyr::select(!c("fold")) %>%
-  # group_by(term, model, checkpoint) %>%
-  summarise(
-    across(everything(),
-           list(mean = ~mean(.x, na.rm = TRUE),
-                sd = ~sd(.x, na.rm = TRUE),
-                serr = ~sd(.x, na.rm = TRUE) / sqrt(sum(!is.na(.x)))),
-            .names = "{.col}_{.fn}"),
-    .by = c(term, model, checkpoint)
-  ) %>%
+  # FIX: no averaging over folds; one row per term from the full-data fit
+  # (column names keep the `_mean` suffix so viz.Rmd needs no change)
+  rename(estimate_mean = estimate, std.error_mean = std.error, p.value_mean = p.value) %>%
   mutate(
     significance_levels = cut(
       p.value_mean,
@@ -423,7 +436,7 @@ clasp_cv_results0 <- bind_rows(clasp_cv_results) %>%
                 sd = ~sd(.x, na.rm = TRUE),
                 serr = ~sd(.x, na.rm = TRUE) / sqrt(sum(!is.na(.x)))),
             .names = "{.col}_{.fn}"),
-    .by = c(model, checkpoint)
+    .by = c(model, checkpoint, formula, cv_group)
   )
 ```
 
@@ -434,6 +447,7 @@ write.csv(clasp_cv_results0, "results/clasp_cv_mentions.csv")
 
 ```{r}
 clasp_cv_results0 %>%
+  filter(formula == "iv") %>%
   ggplot(aes(model, r2_marginal_mean)) +
   geom_col() +
   geom_errorbar(aes(ymin = r2_marginal_mean - r2_marginal_serr, ymax = r2_marginal_mean + r2_marginal_serr), width = 0.2, color = "grey70") +
@@ -444,7 +458,7 @@ clasp_cv_results0 %>%
 
 ```{r}
 clasp_fixef_results0 %>%
-  filter(term != "(Intercept)", model == "pythia-12b", checkpoint == "full model") %>%
+  filter(term != "(Intercept)", model == "pythia-12b", checkpoint == "full model", formula == "iv") %>%
   ggplot(aes(term, estimate_mean, fill = checkpoint)) +
   geom_col(position = position_dodge(width = 0.8),
     width = 0.7,) +

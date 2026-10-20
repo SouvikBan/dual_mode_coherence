@@ -82,8 +82,10 @@ def _score_clasp(
 	sentence_scores = []
 	for _, row in tqdm(clasp_df.iterrows()):
 		stimulus = row["sent"]
+		# FIX: an empty pre-context is read by pandas as NaN and used to be scored as the literal string "nan";
+		# score those sentences with the BOS token only.
 		prefix = f"{ilm_scorer.tokenizer.bos_token} {row["prefix"]}" \
-			if "prefix" in row else f"{ilm_scorer.tokenizer.bos_token}"
+			if ("prefix" in row and isinstance(row["prefix"], str) and row["prefix"].strip()) else f"{ilm_scorer.tokenizer.bos_token}"
 		sentence_score = ilm_scorer.conditional_score(
 			prefix, stimulus, 
 			# we want summed sentence surprisals

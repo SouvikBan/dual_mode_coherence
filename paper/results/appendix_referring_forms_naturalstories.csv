@@ -1,0 +1,5 @@
+rows,model,n,estimate_t125,stat_t125,estimate_mean,n_significant,n_strategies,aic_gain_t125,aic_gain_mean,dll_x100,folds_positive
+all established entities,d_form_accessibility alone,35980,20.2,1.2,29.2,3,11,-0.5,1.2,-0.02,4.8
+all established entities,d_form_givenness alone,35980,25.7,1.6,32.4,7,11,0.5,2.1,-0.01,5.9
+first referent,d_form_first_accessibility alone,25420,11.6,0.7,9.25,0,11,-1.6,-1.6,-0.01,4.3
+first referent,d_form_first_givenness alone,25420,12.2,0.7,13,0,11,-1.5,-1.3,-0.01,4.5

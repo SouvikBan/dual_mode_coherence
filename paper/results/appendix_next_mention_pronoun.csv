@@ -1,0 +1,5 @@
+model,n_targets,estimate_t125,stat_t125,estimate_mean,n_significant,n_strategies,aic_gain_t125,aic_gain_mean,dll_x100,folds_positive
+bayesian,104,46.5,1.9,49,5,11,1.5,1.9,0.04,5.2
+expectancy,104,28.7,1.1,32,0,11,-0.7,-0.2,0.02,5.2
+mirror,104,44,1.8,38.6,1,11,1.2,0.5,-0.02,5.4
+uniform,104,56.4,2.2,56.4,11,11,2.9,2.9,0.03,5

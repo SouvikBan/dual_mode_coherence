@@ -1,0 +1,9 @@
+model,n,estimate_t125,stat_t125,estimate_mean,n_significant,n_strategies,aic_gain_t125,aic_gain_mean,dll_x100,folds_positive
+count_s_first alone,39491,28.6,1.7,23.7,0,11,0.8,0.1,-0.03,3.7
+count_s_subject alone,39491,1.37,0.1,-5.74,0,11,-2,-1.7,-0.01,3.9
+nm_s_first alone,39491,36.4,2.2,34.9,9,11,2.8,2.7,-0.02,5.1
+nm_s_subject alone,39491,-11.8,-0.7,-10,0,11,-1.5,-1.4,-0,4
+s_first alone,39491,23.2,1.3,20.6,0,11,-0.2,-0.5,-0.04,4.4
+s_first | s_subject,39491,21.9,1,19.8,0,11,-2.2,-2.4,NA,NA
+s_subject alone,39491,16,0.9,12.1,0,11,-1.2,-1.4,-0.03,3.4
+s_subject | s_first,39491,2.14,0.1,1.37,0,11,-2.2,-2.4,NA,NA

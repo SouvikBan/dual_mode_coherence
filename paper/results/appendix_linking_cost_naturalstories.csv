@@ -1,0 +1,13 @@
+model,n,estimate_t125,stat_t125,estimate_mean,n_significant,n_strategies,aic_gain_t125,aic_gain_mean,dll_x100,folds_positive
+beta alone,39491,98.3,5,98.3,11,11,21.9,21.9,0.08,6
+beta | all 10 non-entity,39491,93.2,4.6,94.2,11,11,21.7,16.1,NA,NA
+beta | d_beta,39491,84.6,4,95.1,11,11,23.5,20.3,NA,NA
+beta | d_cos,39491,89.9,4.5,91.7,11,11,26.1,24.9,NA,NA
+beta | n_new,39491,135,3.5,135,11,11,21.1,21.1,NA,NA
+d_beta alone,39491,88.5,3.5,82,11,11,9.9,12,-0,5.1
+d_beta | beta,39491,52.5,2,8.1,1,11,23.5,20.3,NA,NA
+d_beta_A alone,39491,202,6.1,132,11,11,29.8,14.9,-0.19,4.3
+d_cos | beta,39491,42.2,2.5,36.4,10,11,26.1,24.9,NA,NA
+d_est + beta (block),39491,NA,NA,NA,NA,11,50.3,45.3,0.09,7.8
+n_new alone,39491,79,3.7,79,11,11,11.1,11.1,0.07,5
+n_new | beta,39491,-46.1,-1.1,-46.1,0,11,21.1,21.1,NA,NA

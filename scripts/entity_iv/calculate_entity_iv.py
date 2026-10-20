@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Entity, lexical, POS-overlap, dependency-label and semantic IV per strategy.
 
+With the default --transition-models file four more channels are written (see entity_iv_ext.py):
+d3_transition_form (form bigram), d3_transition_role_mlp, d3_transition_form_mlp (GUM MLP costs) and
+d8_graph (entity-graph connection-profile distance). The original 15 columns are unchanged.
+
 Use exactly N annotated alternatives for each item/strategy (default 100).
 Write only mean, minimum and 80th percentile, separately for CLASP and NS.
 """
@@ -626,6 +630,7 @@ def calculate_row(
     decay: float,
     text_scorer: TextDistanceScorer,
     absent_model: dict | None = None,
+    ext_scorer=None,
 ) -> dict:
     context = branch_features(comparison.context_sentences)
     target = branch_features(branch_sentences(comparison.target))
@@ -664,7 +669,11 @@ def calculate_row(
         )
     )
     row.update(dependency_distances(comparison.target, comparison.alternative))
-    for metric in (*METRICS, *(("d3_transition_absent",) if absent_model is not None else ())):
+    if ext_scorer is not None:
+        # form / MLP transition channels and the entity-graph distance (entity_iv_ext.py)
+        row.update(ext_scorer.row(comparison))
+    for metric in (*METRICS, *(("d3_transition_absent",) if absent_model is not None else ()),
+                   *(ext_scorer.metrics if ext_scorer is not None else ())):
         if not math.isfinite(row[metric]):
             raise ValueError(f"non-finite {metric}: {comparison.item_id}/{comparison.alternative_id}")
     return row
@@ -730,6 +739,12 @@ def main():
     parser.add_argument("--absent-transition-model", type=Path,
                         help="entity_transition_model.json; adds d3_transition_absent, which "
                              "scores absence instead of dropping it or calling it 0 bits")
+    parser.add_argument("--transition-models", type=Path,
+                        default=Path(__file__).resolve().parent / "gum_transition_models.json",
+                        help="build_gum_models.py output (form bigram + role/form MLP costs); adds "
+                             "d3_transition_form, d3_transition_role_mlp, d3_transition_form_mlp and d8_graph")
+    parser.add_argument("--no-ext-channels", action="store_true",
+                        help="write only the original 15 channels (no transition-model file needed)")
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--dataset", choices=("auto", "naturalstories", "clasp"), default="auto")
     parser.add_argument("--strategies", nargs="+", default=list(STRATEGIES))
@@ -776,6 +791,14 @@ def main():
         if "role" not in absent_model.get("channels", {}):
             parser.error("the transition model has no role channel")
         metrics.append("d3_transition_absent")
+    ext_scorer = None
+    if not args.no_ext_channels:
+        from entity_iv_ext import ExtScorer
+        if not args.transition_models.exists():
+            parser.error(f"{args.transition_models} not found; fit it with build_gum_models.py or pass --no-ext-channels")
+        with args.transition_models.open(encoding="utf-8") as stream:
+            ext_scorer = ExtScorer(json.load(stream))
+        metrics.extend(ext_scorer.metrics)
     sizes = choose_strategy_sample_sizes(args.inputs, args.dataset, args.samples_per_strategy, args.strategies)
     scorer = TextDistanceScorer(args.spacy_model, args.semantic_model, args.device,
                                 args.spacy_batch_size, args.embedding_batch_size)
@@ -788,7 +811,7 @@ def main():
             continue
         texts = [branch_text(branch) for pair in comparisons for branch in (pair.target, pair.alternative)]
         scorer.prepare(texts)
-        rows = [calculate_row(pair, costs, args.activation_decay, scorer, absent_model)
+        rows = [calculate_row(pair, costs, args.activation_decay, scorer, absent_model, ext_scorer)
                 for pair in comparisons]
         summaries.extend(summarise_rows(rows, metrics))
         print(f"computed {path.name}: {len(rows)} pairs", flush=True)
@@ -810,6 +833,8 @@ def main():
         "semantic_device": scorer.device,
         "metrics": metrics, "aggregations": ["mean", "p80", "min"],
         "absent_transition_model": str(args.absent_transition_model or ""),
+        "transition_models_file": str(args.transition_models) if ext_scorer is not None else "",
+        "ext_channels": list(ext_scorer.metrics) if ext_scorer is not None else [],
         "selection": "exactly N already annotated draws per item/strategy; duplicates preserved",
         "missing_values": "empty/empty representations give 0; corrupt annotations/non-finite values raise errors",
         "dependency_representation": "base UD DEPREL in token order; root/punct retained; ngrams do not cross sentences",

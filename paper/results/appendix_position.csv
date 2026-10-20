@@ -1,0 +1,15 @@
+controls,model,n,estimate_t125,stat_t125,estimate_mean,n_significant,n_strategies,aic_gain_t125,aic_gain_mean,n_positive
+linear,beta,39491,98.3,5,98.3,11,11,21.9,21.9,11
+nonlinear,beta,39491,62.4,3.5,62.4,11,11,10.2,10.2,11
+linear,d_beta,39491,88.5,3.5,82,11,11,9.9,12,11
+nonlinear,d_beta,39491,27.8,1.2,42.9,8,11,-0.6,3.1,11
+linear,d_est,39491,111,5.7,102,11,11,28.8,24.6,11
+nonlinear,d_est,39491,-78.5,-3.3,-77.5,11,11,8.6,9.3,0
+linear,d_part,39491,28.1,1.6,21.9,0,11,0.5,-0.3,11
+nonlinear,d_part,39491,33.5,2.2,30.8,9,11,2.7,2.3,11
+linear,d_part_A,39491,38.8,1.8,32.2,5,11,1.2,1.1,10
+nonlinear,d_part_A,39491,26.5,1.4,28.1,7,11,-0.1,1.2,11
+linear,d_top,39491,30.4,1.9,21.5,0,11,1.5,-0.1,11
+nonlinear,d_top,39491,12.3,0.9,8.66,0,11,-1.2,-1.5,11
+linear,n_new,39491,79,3.7,79,11,11,11.1,11.1,11
+nonlinear,n_new,39491,68.3,3.6,68.3,11,11,10.5,10.5,11

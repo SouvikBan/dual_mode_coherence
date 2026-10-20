@@ -111,7 +111,11 @@ point the part files are intact and rerunning the command completes the merge.
 | `run_parallel.py` | shards stage 2 over GPUs and resumes |
 | `corpipe26_seeded.py` | drives CorPipe against a frozen context |
 | `textproc.py` | shared text handling |
-| `calculate_entity_iv.py` | stage 3, the 45 distance columns |
+| `calculate_entity_iv.py` | stage 3, the 45 distance columns plus 12 more from `entity_iv_ext.py` |
+| `entity_iv_ext.py` | the form / MLP transition channels and the entity-graph distance (stage 3 add-on) |
+| `form_inventory.py` | the 15-state referring-expression form of a mention, from its tokens |
+| `build_gum_models.py` | fits the form bigram and the role / form MLP cost models from GUM |
+| `gum_transition_models.json` | those fitted models |
 | `entity_roles.py` | the one definition of a mention's grammatical role |
 | `build_gum_transition_cost.py` | fits the role-transition model from GUM |
 | `gum_deprel_costs_50.json` | that fitted model |
@@ -125,7 +129,22 @@ point the part files are intact and rerunning the command completes the merge.
 
 Reads the annotated documents and scores every target against its alternatives
 on 15 distance functions, each aggregated three ways (mean, 80th percentile,
-minimum), giving 45 columns per strategy.
+minimum), giving 45 columns per strategy, plus four more channels from
+`entity_iv_ext.py` (12 columns, appended after `d_semantic_euclidean_min`):
+
+| column | what it measures |
+|---|---|
+| `d3_transition_form` | the released transition distance with the cost of an entity's first mention taken from a form bigram, `-log2 P(form \| previous form)`, 15 referring-expression forms (`form_inventory.py`) |
+| `d3_transition_role_mlp` | the same with the role cost from a one-hidden-layer MLP `P(role \| previous role, previous form, gap, #mentions)`, fine role inventory (12 states) |
+| `d3_transition_form_mlp` | the same MLP for the form |
+| `d8_graph` | entity-graph distance (Guinaudeau & Strube 2013): the context is a sentence x entity matrix with weights 3 / 2 / 1 for subject / object / other; a continuation's connection profile is its role-weighted link strength to each context sentence; the distance is 1 - cosine between the target's and the alternative's profiles (0 if both are empty, 1 if exactly one is) |
+
+The three transition variants follow the released `d3_transition` rule exactly
+(entities that recur from the context in either continuation, absent entity =
+0 bits, Soergel distance), so a bigram and its MLP counterpart are strongly
+collinear: compare them by swapping one for the other, not by adding both.
+The models come from `gum_transition_models.json` (next section); pass
+`--no-ext-channels` to write only the original 45 columns.
 
     uv run python calculate_entity_iv.py \
         annotated_alternatives/naturalstories annotated_alternatives/clasp \
@@ -176,6 +195,30 @@ All 900 cells of the shipped file reproduce exactly under that formula with
 (12). Whatever is used here must match `--role-inventory` in stage 3 and stage
 4; `calculate_entity_iv.py` refuses a cost file fitted with a different
 inventory rather than silently mixing them.
+
+### The form and MLP cost models
+
+`gum_transition_models.json` holds four models fitted on the same GUM release
+by `build_gum_models.py`: a smoothed bigram and an MLP for the role channel
+(fine inventory, 12 states) and for the form channel (15 states):
+
+    uv run python build_gum_models.py \
+        --gum <GUM dep/ conllu archive or directory> \
+        --output gum_transition_models.json
+
+The observation unit is the same as above (each mention paired with the same
+entity's previous mention). The bigram is `-log2 ((N(prev, cur) + 0.5) /
+(N(prev, .) + 0.5 K))`. The MLP (one hidden layer of 64 ReLU units, softmax
+output) sees the previous role, the previous form, the gap in sentences (bucket
+one-hot and log) and the log number of earlier mentions; its weights are stored
+as plain lists and read back with numpy, so torch is needed for fitting only.
+The script reports 5-fold held-out cost per transition by document for the
+bigram, for an MLP restricted to the bigram's information and for the full MLP,
+and stores them under `cv` in the JSON. The forms are derived from the head
+token's POS and the span's first token (`form_inventory.py`: common bare /
+definite / indefinite / possessed / quantified, proper, personal / possessive /
+demonstrative / wh / other pronoun, numeral, verbal, adjectival, other), the
+same rule on GUM and on the pipeline's own annotation.
 
 ## 4. Gold entity counts
 

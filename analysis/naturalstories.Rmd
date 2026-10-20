@@ -142,7 +142,7 @@ natstories_rts0 <- natstories_rts_clean %>%
   group_by(item, zone) %>%
   subset(select = -c(WorkerId, WorkTimeInSeconds)) %>%
   summarise(
-    across(where(is.numeric), \(x) mean(x, rm.na = TRUE)),
+    across(where(is.numeric), \(x) mean(x, na.rm = TRUE)),   # FIX: the argument is na.rm; rm.na was silently ignored
     .groups  = "drop_last"
   )
 natstories_plot_linear <- merge(x=natstories_rts0, y=natstories_model_surp, by = c("item", "zone"), all.x = TRUE)
@@ -178,7 +178,7 @@ natstories_plot_linear %>%
 natstories_fit_df <- merge(x=natstories_rts_clean, y=natstories_model_surp, by = c("item", "zone"), all.x = TRUE) %>%
     group_by(item, sentence_id, model, checkpoint) %>%
     mutate(
-      sentence_length = length(zone)
+      sentence_length = n_distinct(zone)   # FIX: length(zone) counted words x workers
     ) %>%
   subset(select = -c(word, zone, WorkTimeInSeconds, correct)) %>%
   group_by(item, sentence_id, model, checkpoint, WorkerId) %>%
@@ -200,13 +200,27 @@ natstories_fit_df <- merge(x=natstories_rts_clean, y=natstories_model_surp, by =
 natstories_ivs <- read.csv("../iv_values/naturalstories/iv_temp_125.csv", sep = ",", header = TRUE) %>% 
   dplyr::select(!c(item_id, language, strategy, dataset)) %>%
   dplyr::select(-contains("n_valid")) %>%
+  # FIX: Euclidean = sqrt(2 * cosine distance) per pair; keep cosine only
+  dplyr::select(-starts_with("d_semantic_euclidean")) %>%
   mutate(item = as.integer(str_split_i(document_id, "_", 2))) %>%
   dplyr::select(!document_id) %>%
-  rename(sentence_id = sentence_index)
+  # FIX (off-by-one): the IV file counts sentences from 0, the surprisal-derived sentence_id from 1
+  mutate(sentence_id = sentence_index + 1L) %>%
+  dplyr::select(!sentence_index)
 
 # merge and scale
-natstories_fit_df <- merge(x=natstories_fit_df, y=natstories_ivs, by = c("item", "sentence_id"), all.x = TRUE) %>%
-  mutate(across(sum_RT:d_semantic_euclidean_mean, \(x) as.vector(scale(x)), .names = "{.col}_s"))
+natstories_fit_df <- merge(x=natstories_fit_df, y=natstories_ivs, by = c("item", "sentence_id"), all.x = TRUE)
+# FIX (off-by-one): with the correct join no reading-time row is left without IV values
+stopifnot(sum(is.na(natstories_fit_df$d3_transition_mean)) == 0)
+# gold mention counts (count_entities_ns.py); sent_id is 0-based like the IV file
+natstories_counts <- read.csv("../gold_counts/naturalstories_entity_counts.csv") %>%
+  transmute(item, sentence_id = sent_id + 1L, n_mentions, n_transitions, n_entities, ctx_n_mentions, ctx_n_entities,
+            ctx_role_cost_per_transition, cum_role_cost_per_transition)
+natstories_fit_df <- merge(x = natstories_fit_df, y = natstories_counts, by = c("item", "sentence_id"), all.x = TRUE)
+stopifnot(sum(is.na(natstories_fit_df$ctx_n_mentions)) == 0)
+natstories_fit_df <- natstories_fit_df %>%
+  # d8_graph_min is the last IV column written by calculate_entity_iv.py (form / MLP transition and graph channels)
+  mutate(across(c(sum_RT:d8_graph_min, n_mentions:cum_role_cost_per_transition), \(x) as.vector(scale(x)), .names = "{.col}_s"))
 ```
 
 
@@ -336,28 +350,54 @@ iv_formula <- sum_RT ~ sum_surprisal_s + sentence_length_char_s +
                               d_syntactic_dependency_1gram_mean_s +
                               d_syntactic_dependency_2gram_mean_s +
                               d_syntactic_dependency_3gram_mean_s +
-                              d_semantic_cosine_mean_s +
-                              d_semantic_euclidean_mean_s +
+                              d_semantic_cosine_mean_s + 
+                              d3_transition_form_mean_s +   # form-bigram transition (GUM)
+                              d8_graph_mean_s +             # entity-graph connection-profile distance
                               (1|WorkerId) + (1|item)
+# the MLP cost variants (d3_transition_role_mlp_mean_s, d3_transition_form_mlp_mean_s) are in the IV file but are
+# collinear with the bigram channels; they are compared by swapping them in, not added on top (see analysis/CLAUDE.md)
+
+# gold mention-count model and the combined model (IV channels + counts): how much of the IV effect is mention counts
+mention_formula <- sum_RT ~ sum_surprisal_s + sentence_length_char_s +
+                            n_mentions_s + n_transitions_s + n_entities_s + ctx_n_mentions_s + ctx_n_entities_s +
+                            ctx_role_cost_per_transition_s + cum_role_cost_per_transition_s +
+                            (1|WorkerId) + (1|item)
+# combined model = controls + the six ENTITY channels + the seven gold counts (the other IV channels are left out:
+# the question is how much of the entity-IV effect is mention counts)
+both_formula <- sum_RT ~ sum_surprisal_s + sentence_length_char_s +
+                         d1_recurrence_uniform_mean_s + d1_recurrence_exponential_mean_s + d2_new_head_mean_s + d3_transition_mean_s +
+                         d3_transition_form_mean_s + d8_graph_mean_s +
+                         n_mentions_s + n_transitions_s + n_entities_s + ctx_n_mentions_s + ctx_n_entities_s +
+                         ctx_role_cost_per_transition_s + cum_role_cost_per_transition_s +
+                         (1|WorkerId) + (1|item)
 ```
 
 ```{r}
 calc_test_loglik_gaussian <- function(model, test_data, response_var,
-                                  allow_new_levels = TRUE) {
+                                  allow_new_levels = TRUE, group_var = NULL) {
   
   mu_pred <- predict(model, newdata = test_data,
                      allow.new.levels = allow_new_levels)
   
   # sd of residuals
   resid_sd <- sigma(model)
+  # FIX: the test fold holds UNSEEN levels of group_var (new readers or a new story), whose random intercept is
+  # predicted as 0; the predictive variance for such rows is sigma^2 + var(intercept of group_var), not sigma^2
+  if (!is.null(group_var)) {
+    vc <- as.data.frame(VarCorr(model))
+    tau2 <- sum(vc$vcov[vc$grp == group_var & vc$var1 == "(Intercept)" & is.na(vc$var2)])
+    resid_sd <- sqrt(resid_sd^2 + tau2)
+  }
   
   observed <- test_data[[response_var]]
   n <- nrow(test_data)
   
   # residual sum of squares
-  residual_ss <- sum((test_data$Reaction - mu_pred)^2)
+  # FIX: `test_data$Reaction` did not exist (sleepstudy leftover), so residual_ss was always 0 and the test
+  # data never entered; the Gaussian log-density is -(n/2) log(2 pi) - (n/2) log sigma^2 - RSS / (2 sigma^2)
+  residual_ss <- sum((observed - mu_pred)^2)
   
-  log_lik <- (n / 2) * log(2 * pi) - (n / 2) * log((resid_sd)^2) - (residual_ss / (2 * (resid_sd)^2))
+  log_lik <- -(n / 2) * log(2 * pi) - (n / 2) * log((resid_sd)^2) - (residual_ss / (2 * (resid_sd)^2))
   
   return(
     # sum(dnorm(observed, mean = mu_pred, sd = resid_sd, log = TRUE))
@@ -368,8 +408,10 @@ calc_test_loglik_gaussian <- function(model, test_data, response_var,
 
 
 ```{r}
-model_cross_val <- function(model_formula, df, group_var, num_folds=10){
+model_cross_val <- function(model_formula, df, group_var, num_folds=10, seed = 123){
   
+  # FIX: reproducible folds
+  set.seed(seed)
   # sample folds grouped by WorkerId
   groups <- unique(df[[group_var]])
   fold_map <- setNames(sample(rep(1:num_folds, length.out = length(groups))), groups)
@@ -389,7 +431,7 @@ model_cross_val <- function(model_formula, df, group_var, num_folds=10){
     
     null_fit <- lmer(null_formula, data = train_data)
     model_fit <- lmer(model_formula, data = train_data)
-    model_log_lik <- calc_test_loglik_gaussian(model_fit, test_data, response_var)
+    model_log_lik <- calc_test_loglik_gaussian(model_fit, test_data, response_var, group_var = group_var)
     model_rmse <- calc_test_rmse(model_fit, test_data, response_var)
     model_r2 <- r2(model_fit, null_model = null_fit)
 
@@ -406,9 +448,13 @@ model_cross_val <- function(model_formula, df, group_var, num_folds=10){
   
   cv_summary <- do.call(rbind, cv_results)
   fixef_summary <- do.call(rbind, fixef_results)
+  # FIX: estimates, SEs and p-values from ONE fit on all the data (not averaged over folds)
+  full_fit <- lmer(model_formula, data = df)
+  fixef_full <- tidy(full_fit, effects = "fixed", conf.int = TRUE) %>%
+    transmute(term, estimate, std.error, statistic, p.value, conf.low, conf.high)
   
   return(
-    list(cv_summary = cv_summary, fixef_summary = fixef_summary)
+    list(cv_summary = cv_summary, fixef_summary = fixef_summary, fixef_full = fixef_full)
   )
 }
 ```
@@ -418,37 +464,35 @@ i <- 1
 natstories_fixef_results <- vector("list")
 natstories_cv_results <- vector("list")
 
+# the IV model, the gold mention-count model and the combined model (tagged by `formula`)
+formulas <- list(iv = iv_formula, mention = mention_formula, both = both_formula)
+for (fname in names(formulas)) {
 for (m in unique(natstories_fit_df$model)) {
   for (c in unique(natstories_fit_df$checkpoint)) {
     # print(glue("{m}, {c}"))
-    results <- model_cross_val(
-      iv_formula,
-      natstories_fit_df %>% filter(model == m, checkpoint == c),
-      "WorkerId",
-      num_folds = 5
-    )    
-    natstories_fixef_results[[i]] <- results$fixef_summary %>% mutate(model = m, checkpoint = c)
-    natstories_cv_results[[i]] <- results$cv_summary %>% mutate(model = m, checkpoint = c)
+    df_mc <- natstories_fit_df %>% filter(model == m, checkpoint == c)
+    results <- model_cross_val(formulas[[fname]], df_mc, "WorkerId", num_folds = 5)
+    # leave-one-story-out: folds grouped by story (item); num_folds = number of stories
+    results_loso <- model_cross_val(formulas[[fname]], df_mc, "item", num_folds = n_distinct(df_mc$item))
+    natstories_fixef_results[[i]] <- results$fixef_full %>% mutate(model = m, checkpoint = c, formula = fname)
+    natstories_cv_results[[i]] <- bind_rows(
+      results$cv_summary %>% mutate(cv_group = "new readers (5 folds by WorkerId)"),
+      results_loso$cv_summary %>% mutate(cv_group = "leave-one-story-out")
+    ) %>% mutate(model = m, checkpoint = c, formula = fname)
     
-    print(glue("Finished {m}-{c}"))
+    print(glue("Finished {fname} {m}-{c}"))
     
     i <- i + 1
     
   }
 }
+}
 ```
 ```{r}
 natstories_fixef_results0 <- bind_rows(natstories_fixef_results) %>%
-  dplyr::select(!c("fold")) %>%
-  # group_by(term, model, checkpoint) %>%
-  summarise(
-    across(everything(),
-           list(mean = ~mean(.x, na.rm = TRUE),
-                sd = ~sd(.x, na.rm = TRUE),
-                serr = ~sd(.x, na.rm = TRUE) / sqrt(sum(!is.na(.x)))),
-            .names = "{.col}_{.fn}"),
-    .by = c(term, model, checkpoint)
-  ) %>%
+  # FIX: no averaging over folds; one row per term from the full-data fit
+  # (column names keep the `_mean` suffix so viz.Rmd needs no change)
+  rename(estimate_mean = estimate, std.error_mean = std.error, p.value_mean = p.value) %>%
   mutate(
     significance_levels = cut(
       p.value_mean,
@@ -466,7 +510,7 @@ natstories_cv_results0 <- bind_rows(natstories_cv_results) %>%
                 sd = ~sd(.x, na.rm = TRUE),
                 serr = ~sd(.x, na.rm = TRUE) / sqrt(sum(!is.na(.x)))),
             .names = "{.col}_{.fn}"),
-    .by = c(model, checkpoint)
+    .by = c(model, checkpoint, cv_group, formula)
   )
 ```
 
@@ -480,13 +524,13 @@ natstories_cv_results0 %>%
   ggplot(aes(model, r2_marginal_mean)) +
   geom_col() +
   geom_errorbar(aes(ymin = r2_marginal_mean - r2_marginal_serr, ymax = r2_marginal_mean + r2_marginal_serr), width = 0.2, color = "grey70") +
-  facet_grid(~checkpoint) +
+  facet_grid(cv_group~checkpoint) +
   theme_bw()
 ```
 
 ```{r}
 natstories_fixef_results0 %>%
-  filter(term != "(Intercept)", model == "pythia-12b") %>%
+  filter(term != "(Intercept)", model == "pythia-12b", formula == "iv") %>%
   ggplot(aes(term, estimate_mean, fill = checkpoint)) +
   geom_col(position = position_dodge(width = 0.8), width = 0.7) +
   geom_errorbar(aes(ymin = estimate_mean - std.error_mean, ymax = estimate_mean + std.error_mean),

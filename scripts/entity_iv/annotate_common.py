@@ -305,8 +305,12 @@ class StanzaUD:
         if model_dir:
             self.kwargs["dir"] = str(model_dir)
         self.batch_size = batch_size
+        # `raw` never splits sentences: an alternative must be a single
+        # sentence and parse_many rejects it otherwise. A passage that really
+        # does contain several sentences needs `splitting` instead.
         self.raw = self._pipeline(tokenize_no_ssplit=True)
         self._pretokenized = None
+        self._splitting = None
 
     def _pipeline(self, **extra):
         import stanza
@@ -319,6 +323,13 @@ class StanzaUD:
             except Exception as caught:  # mwt is not in every English package
                 error = caught
         raise error
+
+    @property
+    def splitting(self):
+        """The same models with Stanza's sentence splitter left on."""
+        if self._splitting is None:
+            self._splitting = self._pipeline()
+        return self._splitting
 
     @property
     def pretokenized(self):
@@ -397,7 +408,7 @@ class StanzaUD:
         flat = self.one_line(text)
         if not flat.strip():
             return []
-        document = self.raw(flat)
+        document = self.splitting(flat)
         out = []
         for index, parsed in enumerate(document.sentences):
             tokens = []
@@ -416,7 +427,13 @@ class StanzaUD:
                     tokens.append(item)
             if not tokens:
                 continue
-            span = flat[tokens[0]["char_start"]:tokens[-1]["char_end"]]
+            # Stanza reports offsets into the whole passage, but a sentence's
+            # char_start/char_end must index its OWN text, so rebase them.
+            base = tokens[0]["char_start"]
+            span = flat[base:tokens[-1]["char_end"]]
+            for item in tokens:
+                item["char_start"] -= base
+                item["char_end"] -= base
             sentence = {"sentence_index": index, "text": span, "tokens": tokens,
                         "mentions": [], "grammar_source": "stanza_ud"}
             validate_sentence(sentence)

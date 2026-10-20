@@ -1,0 +1,16 @@
+measure,region,n_rows,n_words,ms_per_sd,t,aic_gain
+linking cost beta,pre,34605,467,4.9,3.1,7.2
+linking cost beta,mention,34966,470,-1.3,-0.7,-1.5
+linking cost beta,spill1,33916,455,3.3,1.8,1.2
+linking cost beta,spill2,33155,445,4,2.8,5.8
+linking cost beta,rest,576975,7791,5,12.4,149.2
+new entities,pre,34605,467,6.5,4,13.5
+new entities,mention,34966,470,-2.1,-1.1,-0.9
+new entities,spill1,33916,455,2.2,1.2,-0.7
+new entities,spill2,33155,445,3.7,2.5,3.9
+new entities,rest,576975,7791,4.6,10.8,114.3
+linking cost beta | new entities,pre,34605,467,-3.2,-0.9,-1.1
+linking cost beta | new entities,mention,34966,470,2,0.5,-1.7
+linking cost beta | new entities,spill1,33916,455,6.3,1.6,0.7
+linking cost beta | new entities,spill2,33155,445,4.1,1.4,-0.1
+linking cost beta | new entities,rest,576975,7791,4.8,5.9,32.9
